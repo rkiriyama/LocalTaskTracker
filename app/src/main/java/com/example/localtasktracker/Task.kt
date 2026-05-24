@@ -1,6 +1,6 @@
 package com.example.localtasktracker
 
-data class Tasks(
+data class Task(
     val id: Int,
     var title: String,
     var isCompleted: Boolean = false,

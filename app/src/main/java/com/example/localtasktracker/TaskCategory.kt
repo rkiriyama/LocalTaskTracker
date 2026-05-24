@@ -6,7 +6,6 @@ data class TaskCategory(
     var categoryName: String,
     var isCompleted: Boolean = false,
     var completionProgress: Int = 0,
-    var subTasksCount: Int = 0,
     val subTasks: MutableList<SubTask> = mutableListOf(),
 ) {
     fun renameCategory(newCatName: String): Boolean {
@@ -32,21 +31,20 @@ data class TaskCategory(
     }
 
     fun computeProgress(): Int {
-        if (subTasksCount == 0) {
+        if (subTasks.isEmpty()) {
             return -1
         }
-        val progress = (getTasksCompleted().toDouble() / subTasksCount) * 100
+        val progress = (getTasksCompleted().toDouble() / subTasks.size) * 100
         return progress.roundToInt()
     }
 
     fun addSubTask(newSubTask: SubTask): Boolean {
         subTasks.add(newSubTask)
-        subTasksCount++
         return true
     }
 
     fun deleteSubTask(taskID: Int): Boolean {
-        if (subTasksCount == 0) {
+        if (subTasks.isEmpty()) {
             return false
         }
         return subTasks.removeAll { it.id == taskID }
