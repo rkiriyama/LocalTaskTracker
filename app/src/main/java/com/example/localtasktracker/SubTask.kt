@@ -19,7 +19,7 @@ data class SubTask(
         isCompleted = status
     }
 
-    private fun getID(): Int {
+    fun getID(): Int {
         return id
     }
 }

@@ -19,7 +19,9 @@ data class TaskCategory(
     }
 
     fun changeCategoryStatus(status: Boolean): Boolean {
-        if ((status && (completionProgress != 100)) or (!status && (completionProgress == 100))) {
+        val currentProgress = computeProgress()
+
+        if ((status && (currentProgress  != 100)) || (!status && (currentProgress == 100))) {
             return false
         }
         isCompleted = status
@@ -32,13 +34,16 @@ data class TaskCategory(
 
     fun computeProgress(): Int {
         if (subTasks.isEmpty()) {
-            return -1
+            return 0
         }
         val progress = (getTasksCompleted().toDouble() / subTasks.size) * 100
         return progress.roundToInt()
     }
 
     fun addSubTask(newSubTask: SubTask): Boolean {
+        if (newSubTask.subTaskName.trim().isEmpty()) {
+            return false
+        }
         subTasks.add(newSubTask)
         return true
     }
