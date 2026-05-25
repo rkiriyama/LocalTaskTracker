@@ -18,8 +18,4 @@ data class SubTask(
     fun changeSubTaskStatus(status: Boolean) {
         isCompleted = status
     }
-
-    fun getID(): Int {
-        return id
-    }
 }

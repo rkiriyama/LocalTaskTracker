@@ -38,7 +38,7 @@ data class Task(
     }
 
     fun computeProgress(): Int {
-        if (categories.isEmpty() and uncategorizedTasks.isEmpty()) {
+        if (categories.isEmpty() && uncategorizedTasks.isEmpty()) {
             return 0
         }
         val progress = ((getCatCompleted().toDouble() + getUncategorizedTasksCompleted().toDouble())
