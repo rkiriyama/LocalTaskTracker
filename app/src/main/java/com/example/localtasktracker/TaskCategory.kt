@@ -6,7 +6,7 @@ data class TaskCategory(
     var categoryName: String,
     var isCompleted: Boolean = false,
     var completionProgress: Int = 0,
-    val subTasks: MutableList<SubTask> = mutableListOf(),
+    val subTasks: MutableList<SubTask> = mutableListOf()
 ) {
     fun renameCategory(newCatName: String): Boolean {
         val trimmedName = newCatName.trim()

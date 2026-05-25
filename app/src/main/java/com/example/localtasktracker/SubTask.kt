@@ -4,7 +4,6 @@ data class SubTask(
     val id: Int,
     var subTaskName: String,
     var isCompleted: Boolean = false
-
 ) {
     fun renameSubTask(newTaskName: String): Boolean {
         val trimmedTitle = newTaskName.trim()
