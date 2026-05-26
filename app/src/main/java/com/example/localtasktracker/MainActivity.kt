@@ -11,9 +11,18 @@ import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
 
-    private val tasks = mutableListOf<String>()
+    private val tasks = mutableListOf<Task>()
     private lateinit var taskListLayout: LinearLayout
     private lateinit var taskInput: EditText
+
+    private lateinit var categoryInput: EditText
+
+    private lateinit var subTaskInput: EditText
+
+    // Unique ID counters
+    private var nextTaskId = 1
+    private var nextCategoryId = 1
+    private var nextSubTaskId = 1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,9 +72,33 @@ class MainActivity : AppCompatActivity() {
         val taskText = taskInput.text.toString().trim()
 
         if (taskText.isNotEmpty()) {
-            tasks.add(taskText)
+            val newTask = Task(nextTaskId, taskText)
+            tasks.add(newTask)
+            nextTaskId++
             taskInput.text.clear()
             refreshTaskList()
+        }
+    }
+
+    private fun addCategory() {
+        val categoryText = categoryInput.text.toString().trim()
+
+        if (categoryText.isNotEmpty()) {
+            val newCategory = Task(nextCategoryId, categoryText)
+            tasks.add(newCategory)
+            nextCategoryId++
+            categoryInput.text.clear()
+        }
+    }
+
+    private fun addSubTask() {
+        val subTaskText = subTaskInput.text.toString().trim()
+
+        if (subTaskText.isNotEmpty()) {
+            val newSubTask = Task(nextSubTaskId, subTaskText)
+            tasks.add(newSubTask)
+            nextSubTaskId++
+            subTaskInput.text.clear()
         }
     }
 
