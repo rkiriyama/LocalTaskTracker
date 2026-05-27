@@ -14,10 +14,10 @@ class MainActivity : AppCompatActivity() {
     private val tasks = mutableListOf<Task>()
     private lateinit var taskListLayout: LinearLayout
     private lateinit var taskInput: EditText
-
     private lateinit var categoryInput: EditText
-
     private lateinit var subTaskInput: EditText
+    private var selectedTask: Task? = null
+    private var selectedCategory: TaskCategory? = null
 
     // Unique ID counters
     private var nextTaskId = 1
@@ -58,6 +58,8 @@ class MainActivity : AppCompatActivity() {
 
         addButton.setOnClickListener {
             addTask()
+            addCategory()
+            addSubTask()
         }
 
         mainLayout.addView(titleText)
@@ -68,38 +70,91 @@ class MainActivity : AppCompatActivity() {
         setContentView(mainLayout)
     }
 
-    private fun addTask() {
+    private fun addTask(): Boolean {
         val taskText = taskInput.text.toString().trim()
 
         if (taskText.isNotEmpty()) {
             val newTask = Task(nextTaskId, taskText)
             tasks.add(newTask)
+            selectedTask = newTask
             nextTaskId++
             taskInput.text.clear()
             refreshTaskList()
+            return true
         }
+        return false
     }
 
-    private fun addCategory() {
+    private fun addCategory(): Boolean {
+        val task = selectedTask ?: return false
         val categoryText = categoryInput.text.toString().trim()
 
         if (categoryText.isNotEmpty()) {
-            val newCategory = Task(nextCategoryId, categoryText)
-            tasks.add(newCategory)
+            val newCategory = TaskCategory(nextCategoryId, categoryText)
+            val success = task.addCategory(newCategory)
+            if (!success) {
+                categoryInput.text.clear()
+                return false
+            }
+            selectedCategory = newCategory
             nextCategoryId++
             categoryInput.text.clear()
+            refreshTaskList()
+            return true
         }
+        return false
     }
 
-    private fun addSubTask() {
+    private fun addSubTask(): Boolean {
+        val category = selectedCategory ?: return false
         val subTaskText = subTaskInput.text.toString().trim()
 
         if (subTaskText.isNotEmpty()) {
-            val newSubTask = Task(nextSubTaskId, subTaskText)
-            tasks.add(newSubTask)
+            val newSubTask = SubTask(nextSubTaskId, subTaskText)
+            val success = category.addSubTask(newSubTask)
+            if (!success) {
+                subTaskInput.text.clear()
+                return false
+            }
             nextSubTaskId++
             subTaskInput.text.clear()
+            refreshTaskList()
+            return true
         }
+        return false
+    }
+
+    private fun deleteTask(taskID: Int): Boolean {
+        val success = tasks.removeAll { it.id == taskID }
+        if (success) {
+            if (selectedTask?.id == taskID) {
+                selectedTask = null
+                selectedCategory = null
+            }
+            refreshTaskList()
+        }
+        return success
+    }
+
+    private fun deleteCategory(categoryID: Int): Boolean {
+        val task = selectedTask ?: return false
+        val success = task.deleteCategory(categoryID)
+        if (success) {
+            if (selectedCategory?.id == categoryID) {
+                selectedCategory = null
+            }
+            refreshTaskList()
+        }
+        return success
+    }
+
+    private fun deleteSubTask(subTaskID: Int): Boolean {
+        val category = selectedCategory ?: return false
+        val success = category.deleteSubTask(subTaskID)
+        if (success) {
+            refreshTaskList()
+        }
+        return success
     }
 
     private fun refreshTaskList() {
@@ -112,7 +167,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             val taskText = TextView(this).apply {
-                text = task
+                text = task.title
                 textSize = 20f
                 layoutParams = LinearLayout.LayoutParams(
                     0,
