@@ -13,6 +13,8 @@ class MainActivity : AppCompatActivity() {
 
     private val tasks = mutableListOf<Task>()
     private lateinit var taskListLayout: LinearLayout
+    private lateinit var categoryListLayout: LinearLayout
+    private lateinit var subTaskListLayout: LinearLayout
     private lateinit var taskInput: EditText
     private lateinit var categoryInput: EditText
     private lateinit var subTaskInput: EditText
@@ -24,15 +26,26 @@ class MainActivity : AppCompatActivity() {
     private var nextCategoryId = 1
     private var nextSubTaskId = 1
 
+    private lateinit var mainLayout: LinearLayout
+
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         supportActionBar?.hide()
 
-        val mainLayout = LinearLayout(this).apply {
+        mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 120, 40, 40)
         }
+
+        setContentView(mainLayout)
+
+        viewTaskListPage()
+    }
+
+    private fun viewTaskListPage() {
+        mainLayout.removeAllViews()
 
         val titleText = TextView(this).apply {
             text = "Local Task Tracker"
@@ -44,8 +57,12 @@ class MainActivity : AppCompatActivity() {
             hint = "Enter a task"
         }
 
-        val addButton = Button(this).apply {
+        val addTaskButton = Button(this).apply {
             text = "Add Task"
+            setOnClickListener {
+                addTask()
+                viewTaskListPage()
+            }
         }
 
         taskListLayout = LinearLayout(this).apply {
@@ -56,18 +73,65 @@ class MainActivity : AppCompatActivity() {
             addView(taskListLayout)
         }
 
-        addButton.setOnClickListener {
-            addTask()
-            addCategory()
-            addSubTask()
+        mainLayout.addView(titleText)
+        mainLayout.addView(taskInput)
+        mainLayout.addView(addTaskButton)
+        mainLayout.addView(scrollView)
+
+        refreshTaskList()
+    }
+
+    private fun viewCategoryPage(task: Task) {
+        mainLayout.removeAllViews()
+
+        selectedTask = task
+        selectedCategory = null
+
+        val titleText = TextView(this).apply {
+            text = task.title
+            textSize = 28f
+            gravity = Gravity.CENTER
+        }
+
+        categoryInput = EditText(this).apply {
+            hint = "Enter a category"
+        }
+
+        val addCategoryButton = Button(this).apply {
+            text = "Add Category"
+            setOnClickListener {
+                addCategory()
+                viewCategoryPage(task)
+            }
+        }
+
+        val backButton = Button(this).apply {
+            text = "Back to Tasks"
+            setOnClickListener {
+                viewTaskListPage()
+            }
+        }
+
+        categoryListLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val scrollView = ScrollView(this).apply {
+            addView(categoryListLayout)
         }
 
         mainLayout.addView(titleText)
-        mainLayout.addView(taskInput)
-        mainLayout.addView(addButton)
+        mainLayout.addView(categoryInput)
+        mainLayout.addView(addCategoryButton)
+        mainLayout.addView(backButton)
         mainLayout.addView(scrollView)
 
-        setContentView(mainLayout)
+        refreshCategoryList(task)
+
+    }
+
+    private fun viewSubTasksPage() {
+
     }
 
     private fun addTask(): Boolean {
@@ -176,18 +240,69 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
+            val viewTaskButton = Button(this).apply {
+                text = "View"
+                setOnClickListener {
+                    viewCategoryPage(task)
+                }
+            }
+
             val deleteButton = Button(this).apply {
                 text = "Delete"
                 setOnClickListener {
-                    tasks.removeAt(index)
+                    val iD = tasks[index].id
+                    deleteTask(iD)
                     refreshTaskList()
                 }
             }
 
             taskRow.addView(taskText)
+            taskRow.addView(viewTaskButton)
             taskRow.addView(deleteButton)
 
             taskListLayout.addView(taskRow)
+        }
+    }
+
+    private fun refreshCategoryList(task: Task) {
+        categoryListLayout.removeAllViews()
+        val taskCat = task.categories
+        for ((index, category) in taskCat.withIndex()) {
+            val categoryRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, 20, 0, 20)
+            }
+
+            val categoryText = TextView(this).apply {
+                text = category.categoryName
+                textSize = 20f
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            }
+
+            val viewCategoryButton = Button(this).apply {
+                text = "View"
+                setOnClickListener {
+                }
+            }
+
+            val deleteButton = Button(this).apply {
+                text = "Delete"
+                setOnClickListener {
+                    val iD = task.categories[index].id
+                    deleteCategory(iD)
+                    refreshCategoryList(task)
+                }
+            }
+
+            categoryRow.addView(categoryText)
+            categoryRow.addView(viewCategoryButton)
+            categoryRow.addView(deleteButton)
+
+            categoryListLayout.addView(categoryRow)
         }
     }
 }
