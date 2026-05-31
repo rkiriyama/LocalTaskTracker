@@ -85,7 +85,6 @@ class MainActivity : AppCompatActivity() {
         mainLayout.removeAllViews()
 
         selectedTask = task
-        selectedCategory = null
 
         val titleText = TextView(this).apply {
             text = task.title
@@ -130,8 +129,52 @@ class MainActivity : AppCompatActivity() {
 
     }
 
-    private fun viewSubTasksPage() {
+    private fun viewSubTasksPage(task: Task, category: TaskCategory) {
+        mainLayout.removeAllViews()
 
+        selectedTask = task
+        selectedCategory = category
+
+        val titleText = TextView(this).apply {
+            text = category.categoryName
+            textSize = 28f
+            gravity = Gravity.CENTER
+        }
+
+        subTaskInput = EditText(this).apply {
+            hint = "Enter a subtask"
+        }
+
+        val addSubTaskButton = Button(this).apply {
+            text = "Add Subtask"
+            setOnClickListener {
+                addSubTask()
+                viewSubTasksPage(task, category)
+            }
+        }
+
+        val backButton = Button(this).apply {
+            text = "Back to category page"
+            setOnClickListener {
+                viewCategoryPage(task)
+            }
+        }
+
+        subTaskListLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val scrollView = ScrollView(this).apply {
+            addView(subTaskListLayout)
+        }
+
+        mainLayout.addView(titleText)
+        mainLayout.addView(subTaskInput)
+        mainLayout.addView(addSubTaskButton)
+        mainLayout.addView(backButton)
+        mainLayout.addView(scrollView)
+
+        refreshSubTaskList(task, category)
     }
 
     private fun addTask(): Boolean {
@@ -224,7 +267,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshTaskList() {
         taskListLayout.removeAllViews()
 
-        for ((index, task) in tasks.withIndex()) {
+        for (task in tasks) {
             val taskRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setPadding(0, 20, 0, 20)
@@ -250,8 +293,7 @@ class MainActivity : AppCompatActivity() {
             val deleteButton = Button(this).apply {
                 text = "Delete"
                 setOnClickListener {
-                    val iD = tasks[index].id
-                    deleteTask(iD)
+                    deleteTask(task.id)
                     refreshTaskList()
                 }
             }
@@ -267,7 +309,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshCategoryList(task: Task) {
         categoryListLayout.removeAllViews()
         val taskCat = task.categories
-        for ((index, category) in taskCat.withIndex()) {
+        for (category in taskCat) {
             val categoryRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setPadding(0, 20, 0, 20)
@@ -286,14 +328,14 @@ class MainActivity : AppCompatActivity() {
             val viewCategoryButton = Button(this).apply {
                 text = "View"
                 setOnClickListener {
+                    viewSubTasksPage(task, category)
                 }
             }
 
             val deleteButton = Button(this).apply {
                 text = "Delete"
                 setOnClickListener {
-                    val iD = task.categories[index].id
-                    deleteCategory(iD)
+                    deleteCategory(category.id)
                     refreshCategoryList(task)
                 }
             }
@@ -303,6 +345,49 @@ class MainActivity : AppCompatActivity() {
             categoryRow.addView(deleteButton)
 
             categoryListLayout.addView(categoryRow)
+        }
+    }
+
+    private fun refreshSubTaskList(task: Task, category: TaskCategory) {
+        subTaskListLayout.removeAllViews()
+        val categorySubClasses = category.subTasks
+        for (subTask in categorySubClasses) {
+            val subTaskRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, 20, 0, 20)
+            }
+
+            val subTaskText = TextView(this).apply {
+                text = subTask.subTaskName
+                textSize = 20f
+                layoutParams = LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            }
+
+            val setCompleteButton = Button(this).apply {
+                text = "Toggle completion"
+                setOnClickListener {
+                    subTask.isCompleted = !subTask.isCompleted
+                    refreshSubTaskList(task, category)
+                }
+            }
+
+            val deleteButton = Button(this).apply {
+                text = "Delete"
+                setOnClickListener {
+                    deleteSubTask(subTask.id)
+                    refreshSubTaskList(task, category)
+                }
+            }
+
+            subTaskRow.addView(subTaskText)
+            subTaskRow.addView(setCompleteButton)
+            subTaskRow.addView(deleteButton)
+
+            subTaskListLayout.addView(subTaskRow)
         }
     }
 }
