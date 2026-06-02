@@ -50,17 +50,17 @@ class MainActivity : AppCompatActivity() {
         mainLayout.removeAllViews()
 
         val titleText = TextView(this).apply {
-            text = "Local Task Tracker"
+            text = "Local Checklist Checker"
             textSize = 28f
             gravity = Gravity.CENTER
         }
 
         taskInput = EditText(this).apply {
-            hint = "Enter a task"
+            hint = "Enter checklist name"
         }
 
         val addTaskButton = Button(this).apply {
-            text = "Add Task"
+            text = "Add checklist"
             setOnClickListener {
                 addTask()
                 viewTaskListPage()
@@ -107,7 +107,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val backButton = Button(this).apply {
-            text = "Back to Tasks"
+            text = "Back to checklists"
             setOnClickListener {
                 viewTaskListPage()
             }
@@ -144,13 +144,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         subTaskInput = EditText(this).apply {
-            hint = "Enter a subtask"
+            hint = "Enter item"
         }
 
         val addSubTaskButton = Button(this).apply {
-            text = "Add Subtask"
+            text = "Add item"
             setOnClickListener {
                 addSubTask()
+                viewSubTasksPage(task, category)
+            }
+        }
+
+        val uncheckSubTasks = Button(this).apply {
+            text = "Uncheck all items"
+            setOnClickListener {
+                uncheckSubTasks(category)
                 viewSubTasksPage(task, category)
             }
         }
@@ -173,6 +181,7 @@ class MainActivity : AppCompatActivity() {
         mainLayout.addView(titleText)
         mainLayout.addView(subTaskInput)
         mainLayout.addView(addSubTaskButton)
+        mainLayout.addView(uncheckSubTasks)
         mainLayout.addView(backButton)
         mainLayout.addView(scrollView)
 
@@ -262,18 +271,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun showRenameTaskDialog(task: Task) {
         val input = EditText(this).apply {
-            hint = "Enter new task name"
+            hint = "Enter new checklist name"
             setText(task.title)
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Rename Task")
+            .setTitle("Rename Checklist")
             .setView(input)
             .setPositiveButton("Save") { _, _ ->
                 val newName = input.text.toString().trim()
 
                 if (newName.isNotEmpty()) {
-                    task.title = newName
+                    task.renameTask(newName)
                     viewTaskListPage()
                 }
             }
@@ -294,7 +303,7 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
 
                 if (newName.isNotEmpty()) {
-                    category.categoryName = newName
+                    category.renameCategory(newName)
                     viewCategoryPage(task)
                 }
             }
@@ -304,12 +313,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun showRenameSubTaskDialog(task: Task, category: TaskCategory, subTask: SubTask) {
         val input = EditText(this).apply {
-            hint = "Enter new subtask name"
+            hint = "Enter new item name"
             setText(subTask.subTaskName)
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Rename Subtask")
+            .setTitle("Rename item")
             .setView(input)
             .setPositiveButton("Save") { _, _ ->
                 val newName = input.text.toString().trim()
@@ -361,7 +370,6 @@ class MainActivity : AppCompatActivity() {
                 text = "Rename"
                 setOnClickListener {
                     showRenameTaskDialog(task)
-                    refreshTaskList()
                 }
             }
 
@@ -412,7 +420,6 @@ class MainActivity : AppCompatActivity() {
                 text = "Rename"
                 setOnClickListener {
                     showRenameCategoryDialog(task, category)
-                    refreshCategoryList(task)
                 }
             }
 
@@ -465,7 +472,6 @@ class MainActivity : AppCompatActivity() {
                 text = "Rename"
                 setOnClickListener {
                     showRenameSubTaskDialog(task, category, subTask)
-                    refreshSubTaskList(task, category)
                 }
             }
 
@@ -475,6 +481,17 @@ class MainActivity : AppCompatActivity() {
             subTaskRow.addView(deleteButton)
 
             subTaskListLayout.addView(subTaskRow)
+        }
+    }
+
+    private fun uncheckSubTasks(category: TaskCategory) {
+        if (category.subTasks.isEmpty()) {
+            return
+        }
+        for (subtask in category.subTasks) {
+            if (subtask.isCompleted) {
+                subtask.changeSubTaskStatus(false)
+            }
         }
     }
 }
