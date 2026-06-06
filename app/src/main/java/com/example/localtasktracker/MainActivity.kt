@@ -351,32 +351,15 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            val viewTaskButton = Button(this).apply {
-                text = "View"
+            val optionsButton = Button(this).apply {
+                text = "⋮"
                 setOnClickListener {
-                    viewCategoryPage(task)
-                }
-            }
-
-            val deleteButton = Button(this).apply {
-                text = "Delete"
-                setOnClickListener {
-                    deleteTask(task.id)
-                    refreshTaskList()
-                }
-            }
-
-            val renameButton = Button(this).apply {
-                text = "Rename"
-                setOnClickListener {
-                    showRenameTaskDialog(task)
+                    showTaskOptionsDialog(task)
                 }
             }
 
             taskRow.addView(taskText)
-            taskRow.addView(viewTaskButton)
-            taskRow.addView(renameButton)
-            taskRow.addView(deleteButton)
+            taskRow.addView(optionsButton)
 
             taskListLayout.addView(taskRow)
         }
@@ -401,32 +384,15 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
-            val viewCategoryButton = Button(this).apply {
-                text = "View"
+            val optionsButton = Button(this).apply {
+                text = "⋮"
                 setOnClickListener {
-                    viewSubTasksPage(task, category)
-                }
-            }
-
-            val deleteButton = Button(this).apply {
-                text = "Delete"
-                setOnClickListener {
-                    deleteCategory(category.id)
-                    refreshCategoryList(task)
-                }
-            }
-
-            val renameButton = Button(this).apply {
-                text = "Rename"
-                setOnClickListener {
-                    showRenameCategoryDialog(task, category)
+                    showCategoryOptionsDialog(task, category)
                 }
             }
 
             categoryRow.addView(categoryText)
-            categoryRow.addView(viewCategoryButton)
-            categoryRow.addView(renameButton)
-            categoryRow.addView(deleteButton)
+            categoryRow.addView(optionsButton)
 
             categoryListLayout.addView(categoryRow)
         }
@@ -460,28 +426,91 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            val deleteButton = Button(this).apply {
-                text = "Delete"
+            val optionsButton = Button(this).apply {
+                text = "⋮"
                 setOnClickListener {
-                    deleteSubTask(subTask.id)
-                    refreshSubTaskList(task, category)
-                }
-            }
-
-            val renameButton = Button(this).apply {
-                text = "Rename"
-                setOnClickListener {
-                    showRenameSubTaskDialog(task, category, subTask)
+                    showSubTaskOptionsDialog(task, category, subTask)
                 }
             }
 
             subTaskRow.addView(checkBox)
             subTaskRow.addView(subTaskText)
-            subTaskRow.addView(renameButton)
-            subTaskRow.addView(deleteButton)
+            subTaskRow.addView(optionsButton)
 
             subTaskListLayout.addView(subTaskRow)
         }
+    }
+
+    private fun showTaskOptionsDialog(task: Task) {
+        val options = arrayOf("View", "Rename", "Delete")
+        AlertDialog.Builder(this)
+            .setTitle(task.title)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> viewCategoryPage(task)
+                    1 -> showRenameTaskDialog(task)
+                    2 -> {
+                        AlertDialog.Builder(this)
+                            .setTitle("Delete \"${task.title}\"?")
+                            .setMessage("This will permanently delete the checklist and all its contents.")
+                            .setPositiveButton("Delete") { _, _ ->
+                                deleteTask(task.id)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showCategoryOptionsDialog(task: Task, category: TaskCategory) {
+        val options = arrayOf("View", "Rename", "Delete")
+        AlertDialog.Builder(this)
+            .setTitle(category.categoryName)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> viewSubTasksPage(task, category)
+                    1 -> showRenameCategoryDialog(task, category)
+                    2 -> {
+                        AlertDialog.Builder(this)
+                            .setTitle("Delete \"${category.categoryName}\"?")
+                            .setMessage("This will permanently delete the category and all its items.")
+                            .setPositiveButton("Delete") { _, _ ->
+                                deleteCategory(category.id)
+                                refreshCategoryList(task)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showSubTaskOptionsDialog(task: Task, category: TaskCategory, subTask: SubTask) {
+        val options = arrayOf("Rename", "Delete")
+        AlertDialog.Builder(this)
+            .setTitle(subTask.subTaskName)
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showRenameSubTaskDialog(task, category, subTask)
+                    1 -> {
+                        AlertDialog.Builder(this)
+                            .setTitle("Delete \"${subTask.subTaskName}\"?")
+                            .setPositiveButton("Delete") { _, _ ->
+                                deleteSubTask(subTask.id)
+                                refreshSubTaskList(task, category)
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun uncheckSubTasks(category: TaskCategory) {
