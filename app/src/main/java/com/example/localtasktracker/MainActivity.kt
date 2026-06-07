@@ -119,7 +119,8 @@ class MainActivity : AppCompatActivity() {
             val titleText = TextView(this@MainActivity).apply {
                 text = task.title
                 textSize = 24f
-                gravity = Gravity.CENTER
+                gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                setPadding(16, 0, 0, 0)
                 layoutParams = LinearLayout.LayoutParams(
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                 )
@@ -398,10 +399,21 @@ class MainActivity : AppCompatActivity() {
     private fun showTaskOptionsDialog(task: Task) {
         AlertDialog.Builder(this)
             .setTitle(task.title)
-            .setItems(arrayOf("Rename", "Delete")) { _, which ->
+            .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Duplicate", "Delete")) { _, which ->
                 when (which) {
                     0 -> showRenameTaskDialog(task)
-                    1 -> AlertDialog.Builder(this)
+                    1 -> {
+                        task.categories.forEach { cat ->
+                            cat.subTasks.forEach { it.changeSubTaskStatus(true) }
+                        }
+                    }
+                    2 -> {
+                        task.categories.forEach { cat ->
+                            cat.subTasks.forEach { it.changeSubTaskStatus(false) }
+                        }
+                    }
+                    3 -> showDuplicateTaskDialog(task)
+                    4 -> AlertDialog.Builder(this)
                         .setTitle("Delete \"${task.title}\"?")
                         .setMessage("This will permanently delete the checklist and all its contents.")
                         .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
@@ -455,5 +467,34 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private fun showDuplicateTaskDialog(task: Task) {
+        val input = EditText(this).apply { setText("${task.title} (copy)") }
+        AlertDialog.Builder(this)
+            .setTitle("Duplicate Checklist")
+            .setView(input)
+            .setPositiveButton("Create") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isNotEmpty()) {
+                    duplicateTask(task, newName)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun duplicateTask(original: Task, newName: String) {
+        val newTask = Task(nextTaskId++, newName)
+        for (category in original.categories) {
+            val newCategory = TaskCategory(nextCategoryId++, category.categoryName)
+            for (subTask in category.subTasks) {
+                val newSubTask = SubTask(nextSubTaskId++, subTask.subTaskName)
+                newCategory.addSubTask(newSubTask)
+            }
+            newTask.addCategory(newCategory)
+        }
+        tasks.add(newTask)
+        renderTaskListScreen()
     }
 }
