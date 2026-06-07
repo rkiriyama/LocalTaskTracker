@@ -24,7 +24,6 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var mainLayout: LinearLayout
     private lateinit var taskListLayout: LinearLayout
-    private lateinit var taskInput: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,7 +39,7 @@ class MainActivity : AppCompatActivity() {
         buildStaticHeader()
     }
 
-    // ─── Static header (title + add-task row) ────────────────────────────────
+    // ─── Static header + scroll area ─────────────────────────────────────────
 
     private fun buildStaticHeader() {
         val titleText = TextView(this).apply {
@@ -48,25 +47,6 @@ class MainActivity : AppCompatActivity() {
             textSize = 28f
             gravity = Gravity.CENTER
         }
-
-        val addTaskRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        taskInput = EditText(this).apply {
-            hint = "Enter checklist name"
-            layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-            )
-        }
-
-        val addTaskButton = Button(this).apply {
-            text = "+ Add"
-            setOnClickListener { addTask() }
-        }
-
-        addTaskRow.addView(taskInput)
-        addTaskRow.addView(addTaskButton)
 
         taskListLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -77,7 +57,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         mainLayout.addView(titleText)
-        mainLayout.addView(addTaskRow)
         mainLayout.addView(scrollView)
 
         refreshFullList()
@@ -91,30 +70,37 @@ class MainActivity : AppCompatActivity() {
         for (task in tasks) {
             val isTaskExpanded = task.id in expandedTaskIds
 
-            // Task row
             taskListLayout.addView(buildTaskRow(task, isTaskExpanded))
 
             if (isTaskExpanded) {
-                // "Add category" input row
-                taskListLayout.addView(buildAddCategoryRow(task))
-
                 for (category in task.categories) {
                     val isCatExpanded = category.id in expandedCategoryIds
 
-                    // Category row
                     taskListLayout.addView(buildCategoryRow(task, category, isCatExpanded))
 
                     if (isCatExpanded) {
-                        // "Add item" input row
-                        taskListLayout.addView(buildAddSubTaskRow(task, category))
-
                         for (subTask in category.subTasks) {
                             taskListLayout.addView(buildSubTaskRow(task, category, subTask))
                         }
+
+                        // + Add Item button at bottom of subtask list
+                        taskListLayout.addView(buildAddButton("+ Add Item", 160) {
+                            showAddSubTaskDialog(task, category)
+                        })
                     }
                 }
+
+                // + Add Category button at bottom of category list
+                taskListLayout.addView(buildAddButton("+ Add Category", 80) {
+                    showAddCategoryDialog(task)
+                })
             }
         }
+
+        // + Add Checklist button at bottom of task list
+        taskListLayout.addView(buildAddButton("+ Add Checklist", 0) {
+            showAddTaskDialog()
+        })
     }
 
     // ─── Row builders ─────────────────────────────────────────────────────────
@@ -229,87 +215,75 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ─── "Add" input row builders ─────────────────────────────────────────────
+    // ─── Add button builder ───────────────────────────────────────────────────
 
-    private fun buildAddCategoryRow(task: Task): LinearLayout {
+    private fun buildAddButton(label: String, leftPadding: Int, onClick: () -> Unit): LinearLayout {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(80, 8, 0, 8)
+            setPadding(leftPadding, 8, 0, 8)
 
-            val input = EditText(this@MainActivity).apply {
-                hint = "New category name"
-                layoutParams = LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                )
+            val btn = Button(this@MainActivity).apply {
+                text = label
+                setOnClickListener { onClick() }
             }
 
-            val addBtn = Button(this@MainActivity).apply {
-                text = "+ Add"
-                setOnClickListener {
-                    val text = input.text.toString().trim()
-                    if (text.isNotEmpty()) {
-                        val newCategory = TaskCategory(nextCategoryId++, text)
-                        task.addCategory(newCategory)
-                        expandedCategoryIds.add(newCategory.id)
-                        refreshFullList()
-                    }
-                }
-            }
-
-            addView(input)
-            addView(addBtn)
+            addView(btn)
         }
     }
 
-    private fun buildAddSubTaskRow(task: Task, category: TaskCategory): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(160, 8, 0, 8)
+    // ─── Add dialogs ──────────────────────────────────────────────────────────
 
-            val input = EditText(this@MainActivity).apply {
-                hint = "New item name"
-                layoutParams = LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                )
-            }
-
-            val addBtn = Button(this@MainActivity).apply {
-                text = "+ Add"
-                setOnClickListener {
-                    val text = input.text.toString().trim()
-                    if (text.isNotEmpty()) {
-                        val newSubTask = SubTask(nextSubTaskId++, text)
-                        category.addSubTask(newSubTask)
-                        refreshFullList()
-                    }
-                }
-            }
-
-            val uncheckBtn = Button(this@MainActivity).apply {
-                text = "Uncheck all"
-                setOnClickListener {
-                    category.subTasks.forEach { it.changeSubTaskStatus(false) }
+    private fun showAddTaskDialog() {
+        val input = EditText(this).apply { hint = "Checklist name" }
+        AlertDialog.Builder(this)
+            .setTitle("New Checklist")
+            .setView(input)
+            .setPositiveButton("Add") { _, _ ->
+                val text = input.text.toString().trim()
+                if (text.isNotEmpty()) {
+                    val newTask = Task(nextTaskId++, text)
+                    tasks.add(newTask)
+                    expandedTaskIds.add(newTask.id)
                     refreshFullList()
                 }
             }
-
-            addView(input)
-            addView(addBtn)
-            addView(uncheckBtn)
-        }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
-    // ─── Add task ─────────────────────────────────────────────────────────────
+    private fun showAddCategoryDialog(task: Task) {
+        val input = EditText(this).apply { hint = "Category name" }
+        AlertDialog.Builder(this)
+            .setTitle("New Category")
+            .setView(input)
+            .setPositiveButton("Add") { _, _ ->
+                val text = input.text.toString().trim()
+                if (text.isNotEmpty()) {
+                    val newCategory = TaskCategory(nextCategoryId++, text)
+                    task.addCategory(newCategory)
+                    expandedCategoryIds.add(newCategory.id)
+                    refreshFullList()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
 
-    private fun addTask() {
-        val text = taskInput.text.toString().trim()
-        if (text.isNotEmpty()) {
-            val newTask = Task(nextTaskId++, text)
-            tasks.add(newTask)
-            expandedTaskIds.add(newTask.id)
-            taskInput.text.clear()
-            refreshFullList()
-        }
+    private fun showAddSubTaskDialog(task: Task, category: TaskCategory) {
+        val input = EditText(this).apply { hint = "Item name" }
+        AlertDialog.Builder(this)
+            .setTitle("New Item")
+            .setView(input)
+            .setPositiveButton("Add") { _, _ ->
+                val text = input.text.toString().trim()
+                if (text.isNotEmpty()) {
+                    val newSubTask = SubTask(nextSubTaskId++, text)
+                    category.addSubTask(newSubTask)
+                    refreshFullList()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     // ─── Delete ───────────────────────────────────────────────────────────────
@@ -404,10 +378,14 @@ class MainActivity : AppCompatActivity() {
     private fun showCategoryOptionsDialog(task: Task, category: TaskCategory) {
         AlertDialog.Builder(this)
             .setTitle(category.categoryName)
-            .setItems(arrayOf("Rename", "Delete")) { _, which ->
+            .setItems(arrayOf("Rename", "Uncheck All Items", "Delete")) { _, which ->
                 when (which) {
                     0 -> showRenameCategoryDialog(task, category)
-                    1 -> AlertDialog.Builder(this)
+                    1 -> {
+                        category.subTasks.forEach { it.changeSubTaskStatus(false) }
+                        refreshFullList()
+                    }
+                    2 -> AlertDialog.Builder(this)
                         .setTitle("Delete \"${category.categoryName}\"?")
                         .setMessage("This will permanently delete the category and all its items.")
                         .setPositiveButton("Delete") { _, _ -> deleteCategory(task, category.id) }
