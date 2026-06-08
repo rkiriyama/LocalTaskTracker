@@ -1,5 +1,6 @@
 package com.example.localtasktracker
 
+import android.content.Context
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
@@ -10,17 +11,26 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
     private val tasks = mutableListOf<Task>()
     private val expandedCategoryIds = mutableSetOf<Int>()
 
-    private var nextTaskId = 1
+    private var nextTaskId     = 1
     private var nextCategoryId = 1
-    private var nextSubTaskId = 1
+    private var nextSubTaskId  = 1
 
     private lateinit var mainLayout: LinearLayout
+
+    companion object {
+        private const val PREFS_NAME = "LocalTaskTrackerPrefs"
+        private const val KEY_DATA   = "tasks_json"
+    }
+
+    // ─── Lifecycle ────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,7 +43,83 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(mainLayout)
 
+        loadData()
         renderTaskListScreen()
+    }
+
+    // ─── Persistence ──────────────────────────────────────────────────────────
+
+    private fun saveData() {
+        val root = JSONArray()
+        for (task in tasks) {
+            val tObj = JSONObject()
+            tObj.put("id",    task.id)
+            tObj.put("title", task.title)
+
+            val cats = JSONArray()
+            for (cat in task.categories) {
+                val cObj = JSONObject()
+                cObj.put("id",   cat.id)
+                cObj.put("name", cat.categoryName)
+
+                val subs = JSONArray()
+                for (sub in cat.subTasks) {
+                    val sObj = JSONObject()
+                    sObj.put("id",        sub.id)
+                    sObj.put("name",      sub.subTaskName)
+                    sObj.put("completed", sub.isCompleted)
+                    subs.put(sObj)
+                }
+                cObj.put("subTasks", subs)
+                cats.put(cObj)
+            }
+            tObj.put("categories", cats)
+            root.put(tObj)
+        }
+
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_DATA, root.toString())
+            .apply()
+    }
+
+    private fun loadData() {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val json  = prefs.getString(KEY_DATA, null) ?: return
+
+        tasks.clear()
+        var maxTaskId = 0
+        var maxCatId  = 0
+        var maxSubId  = 0
+
+        val root = JSONArray(json)
+        for (ti in 0 until root.length()) {
+            val tObj = root.getJSONObject(ti)
+            val task = Task(tObj.getInt("id"), tObj.getString("title"))
+            if (task.id > maxTaskId) maxTaskId = task.id
+
+            val cats = tObj.getJSONArray("categories")
+            for (ci in 0 until cats.length()) {
+                val cObj = cats.getJSONObject(ci)
+                val cat  = TaskCategory(cObj.getInt("id"), cObj.getString("name"))
+                if (cat.id > maxCatId) maxCatId = cat.id
+
+                val subs = cObj.getJSONArray("subTasks")
+                for (si in 0 until subs.length()) {
+                    val sObj = subs.getJSONObject(si)
+                    val sub  = SubTask(sObj.getInt("id"), sObj.getString("name"), sObj.getBoolean("completed"))
+                    if (sub.id > maxSubId) maxSubId = sub.id
+                    cat.subTasks.add(sub)
+                }
+                task.categories.add(cat)
+            }
+            tasks.add(task)
+        }
+
+        // Resume ID counters above the highest saved IDs
+        nextTaskId     = maxTaskId + 1
+        nextCategoryId = maxCatId  + 1
+        nextSubTaskId  = maxSubId  + 1
     }
 
     // ─── Screen 1: Task List ──────────────────────────────────────────────────
@@ -55,17 +141,15 @@ class MainActivity : AppCompatActivity() {
         mainLayout.addView(recyclerView)
 
         val adapter = TaskAdapter(
-            tasks         = tasks,
-            onTaskClick   = { task -> renderTaskDetailScreen(task) },
+            tasks          = tasks,
+            onTaskClick    = { task -> renderTaskDetailScreen(task) },
             onOptionsClick = { task -> showTaskOptionsDialog(task) },
-            onAddClick    = { showAddTaskDialog() },
-            onDragFinished = { /* list already mutated in-place */ }
+            onAddClick     = { showAddTaskDialog() },
+            onDragFinished = { saveData() }
         )
 
         recyclerView.adapter = adapter
-
-        val touchHelper = ItemTouchHelper(DragCallback(adapter))
-        touchHelper.attachToRecyclerView(recyclerView)
+        ItemTouchHelper(DragCallback(adapter)).attachToRecyclerView(recyclerView)
     }
 
     // ─── Screen 2: Task Detail ────────────────────────────────────────────────
@@ -74,7 +158,6 @@ class MainActivity : AppCompatActivity() {
         expandedCategoryIds.clear()
         mainLayout.removeAllViews()
 
-        // Header: ← Back  |  task title
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
@@ -118,18 +201,17 @@ class MainActivity : AppCompatActivity() {
             onSubTaskChecked    = { subTask, checked ->
                 subTask.changeSubTaskStatus(checked)
                 (recyclerView.adapter as DetailAdapter).refresh()
+                saveData()
             },
             onSubTaskOptions    = { cat, subTask -> showSubTaskOptionsDialog(task, cat, subTask, recyclerView) },
             onAddCategory       = { showAddCategoryDialog(task, recyclerView) },
             onAddItem           = { cat -> showAddSubTaskDialog(task, cat, recyclerView) },
-            onDragFinished      = { /* list already mutated in-place */ }
+            onDragFinished      = { saveData() }
         )
 
         recyclerView.adapter = adapter
         adapter.refresh()
-
-        val touchHelper = ItemTouchHelper(DragCallback(adapter))
-        touchHelper.attachToRecyclerView(recyclerView)
+        ItemTouchHelper(DragCallback(adapter)).attachToRecyclerView(recyclerView)
     }
 
     private fun refreshDetail(recyclerView: RecyclerView) {
@@ -146,8 +228,8 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Add") { _, _ ->
                 val text = input.text.toString().trim()
                 if (text.isNotEmpty()) {
-                    val newTask = Task(nextTaskId++, text)
-                    tasks.add(newTask)
+                    tasks.add(Task(nextTaskId++, text))
+                    saveData()
                     renderTaskListScreen()
                 }
             }
@@ -166,6 +248,7 @@ class MainActivity : AppCompatActivity() {
                     val newCat = TaskCategory(nextCategoryId++, text)
                     task.addCategory(newCat)
                     expandedCategoryIds.add(newCat.id)
+                    saveData()
                     refreshDetail(recyclerView)
                 }
             }
@@ -181,8 +264,8 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Add") { _, _ ->
                 val text = input.text.toString().trim()
                 if (text.isNotEmpty()) {
-                    val newSubTask = SubTask(nextSubTaskId++, text)
-                    category.addSubTask(newSubTask)
+                    category.addSubTask(SubTask(nextSubTaskId++, text))
+                    saveData()
                     refreshDetail(recyclerView)
                 }
             }
@@ -194,17 +277,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun deleteTask(taskId: Int) {
         tasks.removeAll { it.id == taskId }
+        saveData()
         renderTaskListScreen()
     }
 
     private fun deleteCategory(task: Task, categoryId: Int, recyclerView: RecyclerView) {
         task.deleteCategory(categoryId)
         expandedCategoryIds.remove(categoryId)
+        saveData()
         refreshDetail(recyclerView)
     }
 
     private fun deleteSubTask(category: TaskCategory, subTaskId: Int, recyclerView: RecyclerView) {
         category.deleteSubTask(subTaskId)
+        saveData()
         refreshDetail(recyclerView)
     }
 
@@ -219,6 +305,7 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isNotEmpty()) {
                     task.renameTask(newName)
+                    saveData()
                     renderTaskListScreen()
                 }
             }
@@ -235,6 +322,7 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isNotEmpty()) {
                     category.renameCategory(newName)
+                    saveData()
                     refreshDetail(recyclerView)
                 }
             }
@@ -253,6 +341,7 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isNotEmpty()) {
                     subTask.renameSubTask(newName)
+                    saveData()
                     refreshDetail(recyclerView)
                 }
             }
@@ -268,12 +357,14 @@ class MainActivity : AppCompatActivity() {
             .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Duplicate", "Delete")) { _, which ->
                 when (which) {
                     0 -> showRenameTaskDialog(task)
-                    1 -> task.categories.forEach { cat ->
-                            cat.subTasks.forEach { it.changeSubTaskStatus(true) }
-                         }
-                    2 -> task.categories.forEach { cat ->
-                            cat.subTasks.forEach { it.changeSubTaskStatus(false) }
-                         }
+                    1 -> {
+                        task.categories.forEach { cat -> cat.subTasks.forEach { it.changeSubTaskStatus(true) } }
+                        saveData()
+                    }
+                    2 -> {
+                        task.categories.forEach { cat -> cat.subTasks.forEach { it.changeSubTaskStatus(false) } }
+                        saveData()
+                    }
                     3 -> showDuplicateTaskDialog(task)
                     4 -> AlertDialog.Builder(this)
                             .setTitle("Delete \"${task.title}\"?")
@@ -295,6 +386,7 @@ class MainActivity : AppCompatActivity() {
                     0 -> showRenameCategoryDialog(task, category, recyclerView)
                     1 -> {
                         category.subTasks.forEach { it.changeSubTaskStatus(false) }
+                        saveData()
                         refreshDetail(recyclerView)
                     }
                     2 -> AlertDialog.Builder(this)
@@ -353,6 +445,7 @@ class MainActivity : AppCompatActivity() {
             newTask.addCategory(newCat)
         }
         tasks.add(newTask)
+        saveData()
         renderTaskListScreen()
     }
 }
