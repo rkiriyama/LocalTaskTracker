@@ -214,55 +214,82 @@ class DetailAdapter(
     override fun canDrop(position: Int): Boolean =
         getItemViewType(position) == TYPE_CATEGORY || getItemViewType(position) == TYPE_SUBTASK
 
+    /**
+     * Called continuously while the user is actively dragging — potentially
+     * many times per second. We ONLY mutate the flat [items] list and call
+     * [notifyItemMoved] here. The real data structures (task.categories,
+     * category.subTasks) are NOT touched until [onDragFinished].
+     *
+     * This matches how TaskAdapter works and allows the drag to glide freely
+     * across the entire list instead of resetting after each step.
+     */
     override fun onItemMoved(from: Int, to: Int) {
         val fromItem = items[from]
         val toItem   = items[to]
 
-        when {
-            // ── Both categories: reorder categories list ──────────────────────
-            fromItem is DetailItem.CategoryItem && toItem is DetailItem.CategoryItem -> {
-                val fromIdx = task.categories.indexOf(fromItem.category)
-                val toIdx   = task.categories.indexOf(toItem.category)
-                val cat = task.categories.removeAt(fromIdx)
-                task.categories.add(toIdx, cat)
-                // Rebuild flat list to keep subtask blocks attached to their category
-                refresh()
-            }
-
-            // ── SubTask moving within the same category: simple reorder ───────
-            fromItem is DetailItem.SubTaskItem && toItem is DetailItem.SubTaskItem &&
-            fromItem.category.id == toItem.category.id -> {
-                val subTasks = fromItem.category.subTasks
-                val fromIdx  = subTasks.indexOf(fromItem.subTask)
-                val toIdx    = subTasks.indexOf(toItem.subTask)
-                val st = subTasks.removeAt(fromIdx)
-                subTasks.add(toIdx, st)
-                refresh()
-            }
-
-            // ── SubTask dropped onto a different category header ───────────────
-            fromItem is DetailItem.SubTaskItem && toItem is DetailItem.CategoryItem -> {
-                fromItem.category.subTasks.remove(fromItem.subTask)
-                toItem.category.subTasks.add(fromItem.subTask)
-                // Auto-expand destination so the moved item is visible
-                expandedCategoryIds.add(toItem.category.id)
-                refresh()
-            }
-
-            // ── SubTask dropped onto a subtask in a different category ─────────
-            fromItem is DetailItem.SubTaskItem && toItem is DetailItem.SubTaskItem &&
-            fromItem.category.id != toItem.category.id -> {
-                fromItem.category.subTasks.remove(fromItem.subTask)
-                val destSubTasks = toItem.category.subTasks
-                val toIdx = destSubTasks.indexOf(toItem.subTask)
-                destSubTasks.add(toIdx, fromItem.subTask)
-                expandedCategoryIds.add(toItem.category.id)
-                refresh()
-            }
+        // Only allow valid drag combinations — silently ignore anything else
+        val valid = when {
+            fromItem is DetailItem.CategoryItem && toItem is DetailItem.CategoryItem -> true
+            fromItem is DetailItem.SubTaskItem  && toItem is DetailItem.SubTaskItem  -> true
+            fromItem is DetailItem.SubTaskItem  && toItem is DetailItem.CategoryItem -> true
+            else -> false
         }
+        if (!valid) return
+
+        // Swap in the flat display list only — no data model writes yet
+        items.removeAt(from)
+        items.add(to, fromItem)
+        notifyItemMoved(from, to)
     }
 
+    /**
+     * Called once when the finger lifts. Now we read the final order of [items]
+     * and commit it back to the real data structures, then call [refresh] to
+     * keep everything in sync.
+     */
     override fun onDragFinished() {
+        // ── Commit category order ─────────────────────────────────────────────
+        val newCategoryOrder = items
+            .filterIsInstance<DetailItem.CategoryItem>()
+            .map { it.category }
+        task.categories.clear()
+        task.categories.addAll(newCategoryOrder)
+
+        // ── Commit subtask order (and handle cross-category moves) ────────────
+        // Clear all subtask lists first, then repopulate from flat items order
+        task.categories.forEach { it.subTasks.clear() }
+
+        for (item in items) {
+            if (item is DetailItem.SubTaskItem) {
+                // The category reference in the item may be stale if the subtask
+                // was dragged to a different category. Find the correct destination
+                // category by looking at what category header preceded this subtask
+                // in the flat items list.
+                val ownerCategory = findOwnerCategory(item)
+                ownerCategory?.subTasks?.add(item.subTask)
+            }
+        }
+
+        // Auto-expand any category that received a subtask from another category
+        task.categories.forEach { cat ->
+            if (cat.subTasks.isNotEmpty()) expandedCategoryIds.add(cat.id)
+        }
+
+        refresh()
         onDragFinished.invoke()
+    }
+
+    /**
+     * Walk backwards through [items] from the position of [subTaskItem] to find
+     * the nearest [DetailItem.CategoryItem] above it — that is the category that
+     * now owns this subtask after the drag.
+     */
+    private fun findOwnerCategory(subTaskItem: DetailItem.SubTaskItem): TaskCategory? {
+        val pos = items.indexOf(subTaskItem)
+        for (i in pos downTo 0) {
+            val item = items[i]
+            if (item is DetailItem.CategoryItem) return item.category
+        }
+        return null
     }
 }
