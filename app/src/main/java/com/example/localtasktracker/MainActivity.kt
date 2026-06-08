@@ -3,21 +3,18 @@ package com.example.localtasktracker
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 
 class MainActivity : AppCompatActivity() {
 
     private val tasks = mutableListOf<Task>()
-
     private val expandedCategoryIds = mutableSetOf<Int>()
-
-    private var selectedTask: Task? = null
 
     private var nextTaskId = 1
     private var nextCategoryId = 1
@@ -42,229 +39,100 @@ class MainActivity : AppCompatActivity() {
     // ─── Screen 1: Task List ──────────────────────────────────────────────────
 
     private fun renderTaskListScreen() {
-        selectedTask = null
         mainLayout.removeAllViews()
 
-        val titleText = TextView(this).apply {
+        val titleText = android.widget.TextView(this).apply {
             text = "Local Checklist Checker"
             textSize = 28f
             gravity = Gravity.CENTER
         }
 
-        val listLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        val scrollView = ScrollView(this).apply {
-            addView(listLayout)
+        val recyclerView = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
         }
 
         mainLayout.addView(titleText)
-        mainLayout.addView(scrollView)
+        mainLayout.addView(recyclerView)
 
-        // Populate task rows
-        for (task in tasks) {
-            listLayout.addView(buildTaskListRow(task))
-        }
+        val adapter = TaskAdapter(
+            tasks         = tasks,
+            onTaskClick   = { task -> renderTaskDetailScreen(task) },
+            onOptionsClick = { task -> showTaskOptionsDialog(task) },
+            onAddClick    = { showAddTaskDialog() },
+            onDragFinished = { /* list already mutated in-place */ }
+        )
 
-        // + Add Checklist button at the bottom
-        listLayout.addView(buildAddButton("+ Add Checklist", 0) {
-            showAddTaskDialog()
-        })
+        recyclerView.adapter = adapter
+
+        val touchHelper = ItemTouchHelper(DragCallback(adapter))
+        touchHelper.attachToRecyclerView(recyclerView)
     }
 
-    private fun buildTaskListRow(task: Task): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 24, 0, 24)
-
-            val nameText = TextView(this@MainActivity).apply {
-                text = task.title
-                textSize = 20f
-                layoutParams = LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                )
-                setOnClickListener {
-                    renderTaskDetailScreen(task)
-                }
-            }
-
-            val optionsBtn = Button(this@MainActivity).apply {
-                text = "⋮"
-                setOnClickListener { showTaskOptionsDialog(task) }
-            }
-
-            addView(nameText)
-            addView(optionsBtn)
-        }
-    }
-
-    // ─── Screen 2: Task Detail (categories + subtasks) ────────────────────────
+    // ─── Screen 2: Task Detail ────────────────────────────────────────────────
 
     private fun renderTaskDetailScreen(task: Task) {
-        selectedTask = task
         expandedCategoryIds.clear()
         mainLayout.removeAllViews()
 
+        // Header: ← Back  |  task title
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, 24)
-
-            val backBtn = Button(this@MainActivity).apply {
-                text = "← Back"
-                setOnClickListener { renderTaskListScreen() }
-            }
-
-            val titleText = TextView(this@MainActivity).apply {
-                text = task.title
-                textSize = 24f
-                gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                setPadding(16, 0, 0, 0)
-                layoutParams = LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                )
-            }
-
-            addView(backBtn)
-            addView(titleText)
         }
 
-        val detailLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val backBtn = Button(this).apply {
+            text = "← Back"
+            setOnClickListener { renderTaskListScreen() }
         }
 
-        val scrollView = ScrollView(this).apply {
-            addView(detailLayout)
+        val titleText = android.widget.TextView(this).apply {
+            text = task.title
+            textSize = 24f
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setPadding(16, 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+            )
+        }
+
+        headerRow.addView(backBtn)
+        headerRow.addView(titleText)
+
+        val recyclerView = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@MainActivity)
         }
 
         mainLayout.addView(headerRow)
-        mainLayout.addView(scrollView)
+        mainLayout.addView(recyclerView)
 
-        refreshDetailList(task, detailLayout)
+        val adapter = DetailAdapter(
+            task                = task,
+            expandedCategoryIds = expandedCategoryIds,
+            onCategoryToggle    = { cat ->
+                if (cat.id in expandedCategoryIds) expandedCategoryIds.remove(cat.id)
+                else expandedCategoryIds.add(cat.id)
+                (recyclerView.adapter as DetailAdapter).refresh()
+            },
+            onCategoryOptions   = { cat -> showCategoryOptionsDialog(task, cat, recyclerView) },
+            onSubTaskChecked    = { subTask, checked ->
+                subTask.changeSubTaskStatus(checked)
+            },
+            onSubTaskOptions    = { cat, subTask -> showSubTaskOptionsDialog(task, cat, subTask, recyclerView) },
+            onAddCategory       = { showAddCategoryDialog(task, recyclerView) },
+            onAddItem           = { cat -> showAddSubTaskDialog(task, cat, recyclerView) },
+            onDragFinished      = { /* list already mutated in-place */ }
+        )
+
+        recyclerView.adapter = adapter
+        adapter.refresh()
+
+        val touchHelper = ItemTouchHelper(DragCallback(adapter))
+        touchHelper.attachToRecyclerView(recyclerView)
     }
 
-    private fun refreshDetailList(task: Task, detailLayout: LinearLayout) {
-        detailLayout.removeAllViews()
-
-        for (category in task.categories) {
-            val isCatExpanded = category.id in expandedCategoryIds
-
-            detailLayout.addView(buildCategoryRow(task, category, isCatExpanded, detailLayout))
-
-            if (isCatExpanded) {
-                for (subTask in category.subTasks) {
-                    detailLayout.addView(buildSubTaskRow(task, category, subTask, detailLayout))
-                }
-
-                detailLayout.addView(buildAddButton("+ Add Item", 80) {
-                    showAddSubTaskDialog(task, category, detailLayout)
-                })
-            }
-        }
-
-        detailLayout.addView(buildAddButton("+ Add Category", 0) {
-            showAddCategoryDialog(task, detailLayout)
-        })
-    }
-
-    // ─── Row builders (detail screen) ────────────────────────────────────────
-
-    private fun buildCategoryRow(
-        task: Task,
-        category: TaskCategory,
-        isExpanded: Boolean,
-        detailLayout: LinearLayout
-    ): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 16, 0, 16)
-
-            val arrow = TextView(this@MainActivity).apply {
-                text = if (isExpanded) "▼" else "▶"
-                textSize = 18f
-                setPadding(0, 0, 16, 0)
-            }
-
-            val nameText = TextView(this@MainActivity).apply {
-                text = category.categoryName
-                textSize = 18f
-                layoutParams = LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                )
-            }
-
-            val optionsBtn = Button(this@MainActivity).apply {
-                text = "⋮"
-                setOnClickListener { showCategoryOptionsDialog(task, category, detailLayout) }
-            }
-
-            val toggleClick = { _: android.view.View ->
-                if (isExpanded) expandedCategoryIds.remove(category.id)
-                else expandedCategoryIds.add(category.id)
-                refreshDetailList(task, detailLayout)
-            }
-
-            arrow.setOnClickListener(toggleClick)
-            nameText.setOnClickListener(toggleClick)
-
-            addView(arrow)
-            addView(nameText)
-            addView(optionsBtn)
-        }
-    }
-
-    private fun buildSubTaskRow(
-        task: Task,
-        category: TaskCategory,
-        subTask: SubTask,
-        detailLayout: LinearLayout
-    ): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(60, 8, 0, 8)
-
-            val checkBox = CheckBox(this@MainActivity).apply {
-                isChecked = subTask.isCompleted
-                setOnCheckedChangeListener { _, checked ->
-                    subTask.changeSubTaskStatus(checked)
-                    refreshDetailList(task, detailLayout)
-                }
-            }
-
-            val nameText = TextView(this@MainActivity).apply {
-                text = subTask.subTaskName
-                textSize = 16f
-                layoutParams = LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                )
-            }
-
-            val optionsBtn = Button(this@MainActivity).apply {
-                text = "⋮"
-                setOnClickListener { showSubTaskOptionsDialog(task, category, subTask, detailLayout) }
-            }
-
-            addView(checkBox)
-            addView(nameText)
-            addView(optionsBtn)
-        }
-    }
-
-    // ─── Add button builder ───────────────────────────────────────────────────
-
-    private fun buildAddButton(label: String, leftPadding: Int, onClick: () -> Unit): LinearLayout {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(leftPadding, 8, 0, 16)
-
-            val btn = Button(this@MainActivity).apply {
-                text = label
-                setOnClickListener { onClick() }
-            }
-
-            addView(btn)
-        }
+    private fun refreshDetail(recyclerView: RecyclerView) {
+        (recyclerView.adapter as? DetailAdapter)?.refresh()
     }
 
     // ─── Add dialogs ──────────────────────────────────────────────────────────
@@ -286,7 +154,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showAddCategoryDialog(task: Task, detailLayout: LinearLayout) {
+    private fun showAddCategoryDialog(task: Task, recyclerView: RecyclerView) {
         val input = EditText(this).apply { hint = "Category name" }
         AlertDialog.Builder(this)
             .setTitle("New Category")
@@ -294,17 +162,17 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Add") { _, _ ->
                 val text = input.text.toString().trim()
                 if (text.isNotEmpty()) {
-                    val newCategory = TaskCategory(nextCategoryId++, text)
-                    task.addCategory(newCategory)
-                    expandedCategoryIds.add(newCategory.id)
-                    refreshDetailList(task, detailLayout)
+                    val newCat = TaskCategory(nextCategoryId++, text)
+                    task.addCategory(newCat)
+                    expandedCategoryIds.add(newCat.id)
+                    refreshDetail(recyclerView)
                 }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun showAddSubTaskDialog(task: Task, category: TaskCategory, detailLayout: LinearLayout) {
+    private fun showAddSubTaskDialog(task: Task, category: TaskCategory, recyclerView: RecyclerView) {
         val input = EditText(this).apply { hint = "Item name" }
         AlertDialog.Builder(this)
             .setTitle("New Item")
@@ -314,7 +182,7 @@ class MainActivity : AppCompatActivity() {
                 if (text.isNotEmpty()) {
                     val newSubTask = SubTask(nextSubTaskId++, text)
                     category.addSubTask(newSubTask)
-                    refreshDetailList(task, detailLayout)
+                    refreshDetail(recyclerView)
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -328,15 +196,15 @@ class MainActivity : AppCompatActivity() {
         renderTaskListScreen()
     }
 
-    private fun deleteCategory(task: Task, categoryId: Int, detailLayout: LinearLayout) {
+    private fun deleteCategory(task: Task, categoryId: Int, recyclerView: RecyclerView) {
         task.deleteCategory(categoryId)
         expandedCategoryIds.remove(categoryId)
-        refreshDetailList(task, detailLayout)
+        refreshDetail(recyclerView)
     }
 
-    private fun deleteSubTask(task: Task, category: TaskCategory, subTaskId: Int, detailLayout: LinearLayout) {
+    private fun deleteSubTask(category: TaskCategory, subTaskId: Int, recyclerView: RecyclerView) {
         category.deleteSubTask(subTaskId)
-        refreshDetailList(task, detailLayout)
+        refreshDetail(recyclerView)
     }
 
     // ─── Rename dialogs ───────────────────────────────────────────────────────
@@ -357,7 +225,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showRenameCategoryDialog(task: Task, category: TaskCategory, detailLayout: LinearLayout) {
+    private fun showRenameCategoryDialog(task: Task, category: TaskCategory, recyclerView: RecyclerView) {
         val input = EditText(this).apply { setText(category.categoryName) }
         AlertDialog.Builder(this)
             .setTitle("Rename Category")
@@ -366,7 +234,7 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isNotEmpty()) {
                     category.renameCategory(newName)
-                    refreshDetailList(task, detailLayout)
+                    refreshDetail(recyclerView)
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -374,10 +242,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showRenameSubTaskDialog(
-        task: Task,
-        category: TaskCategory,
-        subTask: SubTask,
-        detailLayout: LinearLayout
+        task: Task, category: TaskCategory, subTask: SubTask, recyclerView: RecyclerView
     ) {
         val input = EditText(this).apply { setText(subTask.subTaskName) }
         AlertDialog.Builder(this)
@@ -387,7 +252,7 @@ class MainActivity : AppCompatActivity() {
                 val newName = input.text.toString().trim()
                 if (newName.isNotEmpty()) {
                     subTask.renameSubTask(newName)
-                    refreshDetailList(task, detailLayout)
+                    refreshDetail(recyclerView)
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -402,45 +267,41 @@ class MainActivity : AppCompatActivity() {
             .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Duplicate", "Delete")) { _, which ->
                 when (which) {
                     0 -> showRenameTaskDialog(task)
-                    1 -> {
-                        task.categories.forEach { cat ->
+                    1 -> task.categories.forEach { cat ->
                             cat.subTasks.forEach { it.changeSubTaskStatus(true) }
-                        }
-                    }
-                    2 -> {
-                        task.categories.forEach { cat ->
+                         }
+                    2 -> task.categories.forEach { cat ->
                             cat.subTasks.forEach { it.changeSubTaskStatus(false) }
-                        }
-                    }
+                         }
                     3 -> showDuplicateTaskDialog(task)
                     4 -> AlertDialog.Builder(this)
-                        .setTitle("Delete \"${task.title}\"?")
-                        .setMessage("This will permanently delete the checklist and all its contents.")
-                        .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
-                        .setNegativeButton("Cancel", null)
-                        .show()
+                            .setTitle("Delete \"${task.title}\"?")
+                            .setMessage("This will permanently delete the checklist and all its contents.")
+                            .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
+                            .setNegativeButton("Cancel", null)
+                            .show()
                 }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
-    private fun showCategoryOptionsDialog(task: Task, category: TaskCategory, detailLayout: LinearLayout) {
+    private fun showCategoryOptionsDialog(task: Task, category: TaskCategory, recyclerView: RecyclerView) {
         AlertDialog.Builder(this)
             .setTitle(category.categoryName)
             .setItems(arrayOf("Rename", "Uncheck All Items", "Delete")) { _, which ->
                 when (which) {
-                    0 -> showRenameCategoryDialog(task, category, detailLayout)
+                    0 -> showRenameCategoryDialog(task, category, recyclerView)
                     1 -> {
                         category.subTasks.forEach { it.changeSubTaskStatus(false) }
-                        refreshDetailList(task, detailLayout)
+                        refreshDetail(recyclerView)
                     }
                     2 -> AlertDialog.Builder(this)
-                        .setTitle("Delete \"${category.categoryName}\"?")
-                        .setMessage("This will permanently delete the category and all its items.")
-                        .setPositiveButton("Delete") { _, _ -> deleteCategory(task, category.id, detailLayout) }
-                        .setNegativeButton("Cancel", null)
-                        .show()
+                            .setTitle("Delete \"${category.categoryName}\"?")
+                            .setMessage("This will permanently delete the category and all its items.")
+                            .setPositiveButton("Delete") { _, _ -> deleteCategory(task, category.id, recyclerView) }
+                            .setNegativeButton("Cancel", null)
+                            .show()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -448,26 +309,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSubTaskOptionsDialog(
-        task: Task,
-        category: TaskCategory,
-        subTask: SubTask,
-        detailLayout: LinearLayout
+        task: Task, category: TaskCategory, subTask: SubTask, recyclerView: RecyclerView
     ) {
         AlertDialog.Builder(this)
             .setTitle(subTask.subTaskName)
             .setItems(arrayOf("Rename", "Delete")) { _, which ->
                 when (which) {
-                    0 -> showRenameSubTaskDialog(task, category, subTask, detailLayout)
+                    0 -> showRenameSubTaskDialog(task, category, subTask, recyclerView)
                     1 -> AlertDialog.Builder(this)
-                        .setTitle("Delete \"${subTask.subTaskName}\"?")
-                        .setPositiveButton("Delete") { _, _ -> deleteSubTask(task, category, subTask.id, detailLayout) }
-                        .setNegativeButton("Cancel", null)
-                        .show()
+                            .setTitle("Delete \"${subTask.subTaskName}\"?")
+                            .setPositiveButton("Delete") { _, _ -> deleteSubTask(category, subTask.id, recyclerView) }
+                            .setNegativeButton("Cancel", null)
+                            .show()
                 }
             }
             .setNegativeButton("Cancel", null)
             .show()
     }
+
+    // ─── Duplicate ────────────────────────────────────────────────────────────
 
     private fun showDuplicateTaskDialog(task: Task) {
         val input = EditText(this).apply { setText("${task.title} (copy)") }
@@ -476,9 +336,7 @@ class MainActivity : AppCompatActivity() {
             .setView(input)
             .setPositiveButton("Create") { _, _ ->
                 val newName = input.text.toString().trim()
-                if (newName.isNotEmpty()) {
-                    duplicateTask(task, newName)
-                }
+                if (newName.isNotEmpty()) duplicateTask(task, newName)
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -487,12 +345,11 @@ class MainActivity : AppCompatActivity() {
     private fun duplicateTask(original: Task, newName: String) {
         val newTask = Task(nextTaskId++, newName)
         for (category in original.categories) {
-            val newCategory = TaskCategory(nextCategoryId++, category.categoryName)
+            val newCat = TaskCategory(nextCategoryId++, category.categoryName)
             for (subTask in category.subTasks) {
-                val newSubTask = SubTask(nextSubTaskId++, subTask.subTaskName)
-                newCategory.addSubTask(newSubTask)
+                newCat.addSubTask(SubTask(nextSubTaskId++, subTask.subTaskName))
             }
-            newTask.addCategory(newCategory)
+            newTask.addCategory(newCat)
         }
         tasks.add(newTask)
         renderTaskListScreen()
