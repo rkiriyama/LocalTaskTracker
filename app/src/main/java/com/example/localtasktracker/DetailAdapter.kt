@@ -1,6 +1,8 @@
 package com.example.localtasktracker
 
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CheckBox
@@ -81,7 +83,8 @@ class DetailAdapter(
     inner class CategoryViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
         val arrow:      TextView = row.getChildAt(0) as TextView
         val nameText:   TextView = row.getChildAt(1) as TextView
-        val optionsBtn: Button   = row.getChildAt(2) as Button
+        val badgeView:  TextView = row.getChildAt(2) as TextView
+        val optionsBtn: Button   = row.getChildAt(3) as Button
     }
 
     inner class SubTaskViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
@@ -121,9 +124,11 @@ class DetailAdapter(
                     textSize = 18f
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 }
+                val badgeView = makeBadgeView(ctx)
                 val optionsBtn = Button(ctx).apply { text = "⋮" }
                 row.addView(arrow)
                 row.addView(nameText)
+                row.addView(badgeView)
                 row.addView(optionsBtn)
                 CategoryViewHolder(row)
             }
@@ -184,6 +189,7 @@ class DetailAdapter(
                 vh.arrow.setOnClickListener(toggle)
                 vh.nameText.setOnClickListener(toggle)
                 vh.optionsBtn.setOnClickListener { onCategoryOptions(cat) }
+                applyBadge(vh.badgeView, cat.computeProgress())
             }
             is DetailItem.SubTaskItem -> {
                 val vh = holder as SubTaskViewHolder
@@ -291,5 +297,34 @@ class DetailAdapter(
             if (item is DetailItem.CategoryItem) return item.category
         }
         return null
+    }
+
+    // ─── Badge helpers ────────────────────────────────────────────────────────
+
+    private fun makeBadgeView(ctx: android.content.Context): TextView {
+        val size = (48 * ctx.resources.displayMetrics.density).toInt()
+        return TextView(ctx).apply {
+            gravity = Gravity.CENTER
+            textSize = 10f
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(size, size).also {
+                it.marginStart = 8
+                it.marginEnd = 8
+            }
+        }
+    }
+
+    private fun applyBadge(badge: TextView, percent: Int) {
+        badge.text = "$percent%"
+        val color = when {
+            percent >= 100 -> Color.parseColor("#4CAF50") // green
+            percent > 50   -> Color.parseColor("#FFC107") // yellow/amber
+            else           -> Color.parseColor("#F44336") // red
+        }
+        val circle = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+        }
+        badge.background = circle
     }
 }

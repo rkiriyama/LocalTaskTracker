@@ -1,5 +1,7 @@
 package com.example.localtasktracker
 
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -38,8 +40,9 @@ class TaskAdapter(
     // ─── ViewHolders ──────────────────────────────────────────────────────────
 
     inner class TaskViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
-        val nameText: TextView = row.getChildAt(0) as TextView
-        val optionsBtn: Button = row.getChildAt(1) as Button
+        val nameText:   TextView = row.getChildAt(0) as TextView
+        val badgeView:  TextView = row.getChildAt(1) as TextView
+        val optionsBtn: Button   = row.getChildAt(2) as Button
     }
 
     inner class AddViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
@@ -66,8 +69,10 @@ class TaskAdapter(
                         0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                     )
                 }
+                val badgeView = makeBadgeView(ctx)
                 val optionsBtn = Button(ctx).apply { text = "⋮" }
                 row.addView(nameText)
+                row.addView(badgeView)
                 row.addView(optionsBtn)
                 TaskViewHolder(row)
             }
@@ -96,11 +101,45 @@ class TaskAdapter(
                 holder.nameText.text = task.title
                 holder.nameText.setOnClickListener { onTaskClick(task) }
                 holder.optionsBtn.setOnClickListener { onOptionsClick(task) }
+
+                // Task progress = average of all category completion percentages
+                val progress = if (task.categories.isEmpty()) 0
+                    else task.categories.map { it.computeProgress() }.average().toInt()
+                applyBadge(holder.badgeView, progress)
             }
             is AddViewHolder -> {
                 holder.addBtn.setOnClickListener { onAddClick() }
             }
         }
+    }
+
+    // ─── Badge helpers ────────────────────────────────────────────────────────
+
+    private fun makeBadgeView(ctx: android.content.Context): TextView {
+        val size = (48 * ctx.resources.displayMetrics.density).toInt()
+        return TextView(ctx).apply {
+            gravity = Gravity.CENTER
+            textSize = 10f
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(size, size).also {
+                it.marginStart = 8
+                it.marginEnd = 8
+            }
+        }
+    }
+
+    private fun applyBadge(badge: TextView, percent: Int) {
+        badge.text = "$percent%"
+        val color = when {
+            percent >= 100 -> Color.parseColor("#4CAF50") // green
+            percent > 50   -> Color.parseColor("#FFC107") // yellow/amber
+            else           -> Color.parseColor("#F44336") // red
+        }
+        val circle = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+        }
+        badge.background = circle
     }
 
     // ─── DragHost — reorder tasks list ───────────────────────────────────────

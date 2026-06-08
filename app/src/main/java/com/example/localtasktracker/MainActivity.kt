@@ -117,6 +117,7 @@ class MainActivity : AppCompatActivity() {
             onCategoryOptions   = { cat -> showCategoryOptionsDialog(task, cat, recyclerView) },
             onSubTaskChecked    = { subTask, checked ->
                 subTask.changeSubTaskStatus(checked)
+                (recyclerView.adapter as DetailAdapter).refresh()
             },
             onSubTaskOptions    = { cat, subTask -> showSubTaskOptionsDialog(task, cat, subTask, recyclerView) },
             onAddCategory       = { showAddCategoryDialog(task, recyclerView) },
