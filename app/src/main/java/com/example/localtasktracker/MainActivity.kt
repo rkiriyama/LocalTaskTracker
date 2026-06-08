@@ -156,6 +156,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderTaskDetailScreen(task: Task) {
         expandedCategoryIds.clear()
+        task.categories.forEach { expandedCategoryIds.add(it.id) }
         mainLayout.removeAllViews()
 
         val headerRow = LinearLayout(this).apply {
@@ -360,10 +361,12 @@ class MainActivity : AppCompatActivity() {
                     1 -> {
                         task.categories.forEach { cat -> cat.subTasks.forEach { it.changeSubTaskStatus(true) } }
                         saveData()
+                        renderTaskListScreen()
                     }
                     2 -> {
                         task.categories.forEach { cat -> cat.subTasks.forEach { it.changeSubTaskStatus(false) } }
                         saveData()
+                        renderTaskListScreen()
                     }
                     3 -> showDuplicateTaskDialog(task)
                     4 -> AlertDialog.Builder(this)
