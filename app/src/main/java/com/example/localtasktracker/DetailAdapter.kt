@@ -1,11 +1,11 @@
 package com.example.localtasktracker
 
 import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
@@ -13,13 +13,9 @@ import androidx.recyclerview.widget.RecyclerView
 /**
  * RecyclerView adapter for Screen 2 — the flat mixed-type detail list.
  *
- * The list is rebuilt as a flat sequence of [DetailItem] entries every time
- * [refresh] is called. Each entry carries enough context to handle clicks and
- * drag moves correctly.
- *
  * View types:
  *   TYPE_CATEGORY     — category header row (draggable among other category headers)
- *   TYPE_SUBTASK      — subtask row (draggable within its category; droppable into another category)
+ *   TYPE_SUBTASK      — subtask row (draggable within its category; droppable into another)
  *   TYPE_ADD_ITEM     — "+ Add Item" button (not draggable)
  *   TYPE_ADD_CATEGORY — "+ Add Category" button (not draggable)
  */
@@ -53,7 +49,6 @@ class DetailAdapter(
 
     private val items = mutableListOf<DetailItem>()
 
-    /** Rebuild the flat list from the current task/expanded state then notify. */
     fun refresh() {
         items.clear()
         for (category in task.categories) {
@@ -72,19 +67,22 @@ class DetailAdapter(
     override fun getItemCount(): Int = items.size
 
     override fun getItemViewType(position: Int): Int = when (items[position]) {
-        is DetailItem.CategoryItem     -> TYPE_CATEGORY
-        is DetailItem.SubTaskItem      -> TYPE_SUBTASK
-        is DetailItem.AddItemButton    -> TYPE_ADD_ITEM
+        is DetailItem.CategoryItem      -> TYPE_CATEGORY
+        is DetailItem.SubTaskItem       -> TYPE_SUBTASK
+        is DetailItem.AddItemButton     -> TYPE_ADD_ITEM
         is DetailItem.AddCategoryButton -> TYPE_ADD_CATEGORY
     }
 
     // ─── ViewHolders ──────────────────────────────────────────────────────────
 
     inner class CategoryViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
-        val arrow:      TextView = row.getChildAt(0) as TextView
-        val nameText:   TextView = row.getChildAt(1) as TextView
-        val badgeView:  TextView = row.getChildAt(2) as TextView
-        val optionsBtn: Button   = row.getChildAt(3) as Button
+        // order: arrow | badgeFrame | nameText | optionsBtn
+        val arrow:      TextView    = row.getChildAt(0) as TextView
+        val badgeFrame: FrameLayout = row.getChildAt(1) as FrameLayout
+        val nameText:   TextView    = row.getChildAt(2) as TextView
+        val optionsBtn: Button      = row.getChildAt(3) as Button
+        val ringView:   RingView    = badgeFrame.getChildAt(0) as RingView
+        val pctText:    TextView    = badgeFrame.getChildAt(1) as TextView
     }
 
     inner class SubTaskViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
@@ -113,6 +111,7 @@ class DetailAdapter(
             TYPE_CATEGORY -> {
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
                     setPadding(0, 16, 0, 16)
                     layoutParams = matchWrap
                 }
@@ -120,28 +119,34 @@ class DetailAdapter(
                     textSize = 18f
                     setPadding(0, 0, 16, 0)
                 }
+                val badgeFrame = makeBadgeFrame(ctx, 44)
                 val nameText = TextView(ctx).apply {
                     textSize = 18f
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    setPadding(12, 0, 0, 0)
+                    layoutParams = LinearLayout.LayoutParams(
+                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                    )
                 }
-                val badgeView = makeBadgeView(ctx)
                 val optionsBtn = Button(ctx).apply { text = "⋮" }
                 row.addView(arrow)
+                row.addView(badgeFrame)
                 row.addView(nameText)
-                row.addView(badgeView)
                 row.addView(optionsBtn)
                 CategoryViewHolder(row)
             }
             TYPE_SUBTASK -> {
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
                     setPadding(60, 8, 0, 8)
                     layoutParams = matchWrap
                 }
                 val checkBox = CheckBox(ctx)
                 val nameText = TextView(ctx).apply {
                     textSize = 16f
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    layoutParams = LinearLayout.LayoutParams(
+                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                    )
                 }
                 val optionsBtn = Button(ctx).apply { text = "⋮" }
                 row.addView(checkBox)
@@ -159,7 +164,7 @@ class DetailAdapter(
                 row.addView(addBtn)
                 AddItemViewHolder(row)
             }
-            else -> { // TYPE_ADD_CATEGORY
+            else -> {
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     setPadding(0, 8, 0, 16)
@@ -183,19 +188,16 @@ class DetailAdapter(
                 vh.arrow.text = if (isExpanded) "▼" else "▶"
                 vh.nameText.text = cat.categoryName
                 vh.row.setBackgroundColor(Color.TRANSPARENT)
-                val toggle = { _: android.view.View ->
-                    onCategoryToggle(cat)
-                }
+                val toggle = { _: android.view.View -> onCategoryToggle(cat) }
                 vh.arrow.setOnClickListener(toggle)
                 vh.nameText.setOnClickListener(toggle)
                 vh.optionsBtn.setOnClickListener { onCategoryOptions(cat) }
-                applyBadge(vh.badgeView, cat.computeProgress())
+                applyBadge(vh.ringView, vh.pctText, cat.computeProgress())
             }
             is DetailItem.SubTaskItem -> {
                 val vh = holder as SubTaskViewHolder
                 val subTask = item.subTask
                 vh.nameText.text = subTask.subTaskName
-                // Detach listener before setting state to avoid spurious callbacks
                 vh.checkBox.setOnCheckedChangeListener(null)
                 vh.checkBox.isChecked = subTask.isCompleted
                 vh.checkBox.setOnCheckedChangeListener { _, checked ->
@@ -212,7 +214,7 @@ class DetailAdapter(
         }
     }
 
-    // ─── DragHost — reorder categories and subtasks ───────────────────────────
+    // ─── DragHost ─────────────────────────────────────────────────────────────
 
     override fun canDrag(position: Int): Boolean =
         getItemViewType(position) == TYPE_CATEGORY || getItemViewType(position) == TYPE_SUBTASK
@@ -220,20 +222,9 @@ class DetailAdapter(
     override fun canDrop(position: Int): Boolean =
         getItemViewType(position) == TYPE_CATEGORY || getItemViewType(position) == TYPE_SUBTASK
 
-    /**
-     * Called continuously while the user is actively dragging — potentially
-     * many times per second. We ONLY mutate the flat [items] list and call
-     * [notifyItemMoved] here. The real data structures (task.categories,
-     * category.subTasks) are NOT touched until [onDragFinished].
-     *
-     * This matches how TaskAdapter works and allows the drag to glide freely
-     * across the entire list instead of resetting after each step.
-     */
     override fun onItemMoved(from: Int, to: Int) {
         val fromItem = items[from]
         val toItem   = items[to]
-
-        // Only allow valid drag combinations — silently ignore anything else
         val valid = when {
             fromItem is DetailItem.CategoryItem && toItem is DetailItem.CategoryItem -> true
             fromItem is DetailItem.SubTaskItem  && toItem is DetailItem.SubTaskItem  -> true
@@ -241,55 +232,31 @@ class DetailAdapter(
             else -> false
         }
         if (!valid) return
-
-        // Swap in the flat display list only — no data model writes yet
         items.removeAt(from)
         items.add(to, fromItem)
         notifyItemMoved(from, to)
     }
 
-    /**
-     * Called once when the finger lifts. Now we read the final order of [items]
-     * and commit it back to the real data structures, then call [refresh] to
-     * keep everything in sync.
-     */
     override fun onDragFinished() {
-        // ── Commit category order ─────────────────────────────────────────────
         val newCategoryOrder = items
             .filterIsInstance<DetailItem.CategoryItem>()
             .map { it.category }
         task.categories.clear()
         task.categories.addAll(newCategoryOrder)
 
-        // ── Commit subtask order (and handle cross-category moves) ────────────
-        // Clear all subtask lists first, then repopulate from flat items order
         task.categories.forEach { it.subTasks.clear() }
-
         for (item in items) {
             if (item is DetailItem.SubTaskItem) {
-                // The category reference in the item may be stale if the subtask
-                // was dragged to a different category. Find the correct destination
-                // category by looking at what category header preceded this subtask
-                // in the flat items list.
-                val ownerCategory = findOwnerCategory(item)
-                ownerCategory?.subTasks?.add(item.subTask)
+                findOwnerCategory(item)?.subTasks?.add(item.subTask)
             }
         }
-
-        // Auto-expand any category that received a subtask from another category
         task.categories.forEach { cat ->
             if (cat.subTasks.isNotEmpty()) expandedCategoryIds.add(cat.id)
         }
-
         refresh()
         onDragFinished.invoke()
     }
 
-    /**
-     * Walk backwards through [items] from the position of [subTaskItem] to find
-     * the nearest [DetailItem.CategoryItem] above it — that is the category that
-     * now owns this subtask after the drag.
-     */
     private fun findOwnerCategory(subTaskItem: DetailItem.SubTaskItem): TaskCategory? {
         val pos = items.indexOf(subTaskItem)
         for (i in pos downTo 0) {
@@ -301,30 +268,33 @@ class DetailAdapter(
 
     // ─── Badge helpers ────────────────────────────────────────────────────────
 
-    private fun makeBadgeView(ctx: android.content.Context): TextView {
-        val size = (48 * ctx.resources.displayMetrics.density).toInt()
-        return TextView(ctx).apply {
-            gravity = Gravity.CENTER
-            textSize = 10f
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(size, size).also {
-                it.marginStart = 8
-                it.marginEnd = 8
-            }
+    private fun makeBadgeFrame(ctx: android.content.Context, dpSize: Int): FrameLayout {
+        val dp   = ctx.resources.displayMetrics.density
+        val size = (dpSize * dp).toInt()
+        val params = LinearLayout.LayoutParams(size, size)
+        val frame = FrameLayout(ctx).apply { layoutParams = params }
+        val ring = RingView(ctx).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
         }
+        val label = TextView(ctx).apply {
+            gravity = Gravity.CENTER
+            textSize = 8f
+            setTextColor(android.graphics.Color.WHITE)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        frame.addView(ring)
+        frame.addView(label)
+        return frame
     }
 
-    private fun applyBadge(badge: TextView, percent: Int) {
-        badge.text = "$percent%"
-        val color = when {
-            percent >= 100 -> Color.parseColor("#4CAF50") // green
-            percent > 50   -> Color.parseColor("#FFC107") // yellow/amber
-            else           -> Color.parseColor("#F44336") // red
-        }
-        val circle = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(color)
-        }
-        badge.background = circle
+    private fun applyBadge(ring: RingView, label: TextView, percent: Int) {
+        label.text = "$percent%"
+        ring.setProgress(percent, badgeColor(percent))
     }
 }
