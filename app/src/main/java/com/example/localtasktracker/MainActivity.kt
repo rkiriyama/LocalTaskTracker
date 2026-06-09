@@ -87,39 +87,45 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val json  = prefs.getString(KEY_DATA, null) ?: return
 
-        tasks.clear()
-        var maxTaskId = 0
-        var maxCatId  = 0
-        var maxSubId  = 0
+        try {
+            tasks.clear()
+            var maxTaskId = 0
+            var maxCatId  = 0
+            var maxSubId  = 0
 
-        val root = JSONArray(json)
-        for (ti in 0 until root.length()) {
-            val tObj = root.getJSONObject(ti)
-            val task = Task(tObj.getInt("id"), tObj.getString("title"))
-            if (task.id > maxTaskId) maxTaskId = task.id
+            val root = JSONArray(json)
+            for (ti in 0 until root.length()) {
+                val tObj = root.getJSONObject(ti)
+                val task = Task(tObj.optInt("id", nextTaskId++), tObj.optString("title", "Untitled"))
+                if (task.id > maxTaskId) maxTaskId = task.id
 
-            val cats = tObj.getJSONArray("categories")
-            for (ci in 0 until cats.length()) {
-                val cObj = cats.getJSONObject(ci)
-                val cat  = TaskCategory(cObj.getInt("id"), cObj.getString("name"))
-                if (cat.id > maxCatId) maxCatId = cat.id
+                val cats = tObj.optJSONArray("categories") ?: continue
+                for (ci in 0 until cats.length()) {
+                    val cObj = cats.getJSONObject(ci)
+                    val cat  = TaskCategory(cObj.optInt("id", nextCategoryId++), cObj.optString("name", "Unnamed"))
+                    if (cat.id > maxCatId) maxCatId = cat.id
 
-                val subs = cObj.getJSONArray("subTasks")
-                for (si in 0 until subs.length()) {
-                    val sObj = subs.getJSONObject(si)
-                    val sub  = SubTask(sObj.getInt("id"), sObj.getString("name"), sObj.getBoolean("completed"))
-                    if (sub.id > maxSubId) maxSubId = sub.id
-                    cat.subTasks.add(sub)
+                    val subs = cObj.optJSONArray("subTasks") ?: JSONArray()
+                    for (si in 0 until subs.length()) {
+                        val sObj = subs.getJSONObject(si)
+                        val sub  = SubTask(sObj.optInt("id", nextSubTaskId++), sObj.optString("name", "Unnamed"), sObj.optBoolean("completed", false))
+                        if (sub.id > maxSubId) maxSubId = sub.id
+                        cat.subTasks.add(sub)
+                    }
+                    task.categories.add(cat)
                 }
-                task.categories.add(cat)
+                tasks.add(task)
             }
-            tasks.add(task)
-        }
 
-        // Resume ID counters above the highest saved IDs
-        nextTaskId     = maxTaskId + 1
-        nextCategoryId = maxCatId  + 1
-        nextSubTaskId  = maxSubId  + 1
+            // Resume ID counters above the highest saved IDs
+            nextTaskId     = maxTaskId + 1
+            nextCategoryId = maxCatId  + 1
+            nextSubTaskId  = maxSubId  + 1
+
+        } catch (e: Exception) {
+            // Corrupted or unreadable data — start fresh rather than crash
+            tasks.clear()
+        }
     }
 
     // ─── Screen 1: Task List ──────────────────────────────────────────────────
