@@ -238,32 +238,17 @@ class DetailAdapter(
     }
 
     override fun onDragFinished() {
+        // Read the new category order from the flat display list.
+        // Subtasks are NOT touched here — each category already owns its correct
+        // subtasks in category.subTasks regardless of whether it was expanded or not.
         val newCategoryOrder = items
             .filterIsInstance<DetailItem.CategoryItem>()
             .map { it.category }
         task.categories.clear()
         task.categories.addAll(newCategoryOrder)
 
-        task.categories.forEach { it.subTasks.clear() }
-        for (item in items) {
-            if (item is DetailItem.SubTaskItem) {
-                findOwnerCategory(item)?.subTasks?.add(item.subTask)
-            }
-        }
-        task.categories.forEach { cat ->
-            if (cat.subTasks.isNotEmpty()) expandedCategoryIds.add(cat.id)
-        }
         refresh()
         onDragFinished.invoke()
-    }
-
-    private fun findOwnerCategory(subTaskItem: DetailItem.SubTaskItem): TaskCategory? {
-        val pos = items.indexOf(subTaskItem)
-        for (i in pos downTo 0) {
-            val item = items[i]
-            if (item is DetailItem.CategoryItem) return item.category
-        }
-        return null
     }
 
     // ─── Badge helpers ────────────────────────────────────────────────────────
