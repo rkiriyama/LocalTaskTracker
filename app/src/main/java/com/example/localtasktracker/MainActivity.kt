@@ -3,6 +3,7 @@ package com.example.localtasktracker
 import android.content.Context
 import android.os.Bundle
 import android.view.Gravity
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -225,11 +226,19 @@ class MainActivity : AppCompatActivity() {
         (recyclerView.adapter as? DetailAdapter)?.refresh()
     }
 
+    /** Focus [input] and show the soft keyboard as soon as [dialog] is visible.
+     *  Pass selectAll=true for rename/duplicate dialogs so existing text is pre-selected. */
+    private fun focusInput(dialog: AlertDialog, input: EditText, selectAll: Boolean = false) {
+        input.requestFocus()
+        if (selectAll) input.selectAll()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+    }
+
     // ─── Add dialogs ──────────────────────────────────────────────────────────
 
     private fun showAddTaskDialog() {
         val input = EditText(this).apply { hint = "Checklist name" }
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("New Checklist")
             .setView(input)
             .setPositiveButton("Add") { _, _ ->
@@ -242,11 +251,12 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+        focusInput(dialog, input)
     }
 
     private fun showAddCategoryDialog(task: Task, recyclerView: RecyclerView) {
         val input = EditText(this).apply { hint = "Category name" }
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("New Category")
             .setView(input)
             .setPositiveButton("Add") { _, _ ->
@@ -261,11 +271,12 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+        focusInput(dialog, input)
     }
 
     private fun showAddSubTaskDialog(task: Task, category: TaskCategory, recyclerView: RecyclerView) {
         val input = EditText(this).apply { hint = "Item name" }
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("New Item")
             .setView(input)
             .setPositiveButton("Add") { _, _ ->
@@ -278,6 +289,7 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+        focusInput(dialog, input)
     }
 
     // ─── Delete ───────────────────────────────────────────────────────────────
@@ -305,7 +317,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showRenameTaskDialog(task: Task) {
         val input = EditText(this).apply { setText(task.title) }
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Rename Checklist")
             .setView(input)
             .setPositiveButton("Save") { _, _ ->
@@ -318,11 +330,12 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+        focusInput(dialog, input, selectAll = true)
     }
 
     private fun showRenameCategoryDialog(task: Task, category: TaskCategory, recyclerView: RecyclerView) {
         val input = EditText(this).apply { setText(category.categoryName) }
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Rename Category")
             .setView(input)
             .setPositiveButton("Save") { _, _ ->
@@ -335,13 +348,14 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+        focusInput(dialog, input, selectAll = true)
     }
 
     private fun showRenameSubTaskDialog(
         task: Task, category: TaskCategory, subTask: SubTask, recyclerView: RecyclerView
     ) {
         val input = EditText(this).apply { setText(subTask.subTaskName) }
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Rename Item")
             .setView(input)
             .setPositiveButton("Save") { _, _ ->
@@ -354,6 +368,7 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+        focusInput(dialog, input, selectAll = true)
     }
 
     // ─── Options dialogs (⋮) ─────────────────────────────────────────────────
@@ -433,7 +448,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showDuplicateTaskDialog(task: Task) {
         val input = EditText(this).apply { setText("${task.title} (copy)") }
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Duplicate Checklist")
             .setView(input)
             .setPositiveButton("Create") { _, _ ->
@@ -442,6 +457,7 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+        focusInput(dialog, input, selectAll = true)
     }
 
     private fun duplicateTask(original: Task, newName: String) {
