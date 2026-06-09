@@ -216,29 +216,38 @@ class DetailAdapter(
 
     // ─── DragHost ─────────────────────────────────────────────────────────────
 
-    override fun canDrag(position: Int): Boolean =
-        getItemViewType(position) == TYPE_CATEGORY || getItemViewType(position) == TYPE_SUBTASK
+    /** Tracks the view type of the item currently being dragged, or -1 when idle. */
+    private var draggingType: Int = -1
 
-    override fun canDrop(position: Int): Boolean =
-        getItemViewType(position) == TYPE_CATEGORY || getItemViewType(position) == TYPE_SUBTASK
+    override fun canDrag(position: Int): Boolean {
+        val type = getItemViewType(position)
+        return type == TYPE_CATEGORY || type == TYPE_SUBTASK
+    }
+
+    override fun canDrop(position: Int): Boolean {
+        val targetType = getItemViewType(position)
+        return when (draggingType) {
+            // A category may only land on another category row
+            TYPE_CATEGORY -> targetType == TYPE_CATEGORY
+            // A subtask may land on another subtask or a category header
+            TYPE_SUBTASK  -> targetType == TYPE_SUBTASK || targetType == TYPE_CATEGORY
+            // Fallback: allow if we somehow don't know the drag type yet
+            else -> targetType == TYPE_CATEGORY || targetType == TYPE_SUBTASK
+        }
+    }
 
     override fun onItemMoved(from: Int, to: Int) {
         if (from < 0 || to < 0 || from >= items.size || to >= items.size) return
-        val fromItem = items[from]
-        val toItem   = items[to]
-        val valid = when {
-            fromItem is DetailItem.CategoryItem && toItem is DetailItem.CategoryItem -> true
-            fromItem is DetailItem.SubTaskItem  && toItem is DetailItem.SubTaskItem  -> true
-            fromItem is DetailItem.SubTaskItem  && toItem is DetailItem.CategoryItem -> true
-            else -> false
-        }
-        if (!valid) return
-        items.removeAt(from)
-        items.add(to, fromItem)
+        // Record the dragging type on the first move so canDrop stays accurate for the whole gesture
+        if (draggingType == -1) draggingType = getItemViewType(from)
+        val item = items.removeAt(from)
+        items.add(to, item)
         notifyItemMoved(from, to)
     }
 
     override fun onDragFinished() {
+        draggingType = -1   // reset so next drag starts fresh
+
         // Read the new category order from the flat display list.
         // Subtasks are NOT touched here — each category already owns its correct
         // subtasks in category.subTasks regardless of whether it was expanded or not.
