@@ -232,8 +232,10 @@ class DetailAdapter(
     override fun canDrop(position: Int): Boolean {
         val targetType = getItemViewType(position)
         return when (draggingType) {
-            // A category may only land on another category row
-            TYPE_CATEGORY -> targetType == TYPE_CATEGORY
+            // A category header may pass through any row so it can skip over its own children.
+            // onDragFinished rebuilds the model from the flat list, so intermediate states
+            // where the header sits next to non-category rows are harmless.
+            TYPE_CATEGORY -> targetType != TYPE_ADD_CATEGORY
             // A subtask may land on another subtask or a category header
             TYPE_SUBTASK  -> targetType == TYPE_SUBTASK || targetType == TYPE_CATEGORY
             // Fallback: allow if we somehow don't know the drag type yet
