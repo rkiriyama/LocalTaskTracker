@@ -232,24 +232,44 @@ class DetailAdapter(
     override fun canDrop(position: Int): Boolean {
         val targetType = getItemViewType(position)
         return when (draggingType) {
-            // A category header may pass through any row so it can skip over its own children.
-            // onDragFinished rebuilds the model from the flat list, so intermediate states
-            // where the header sits next to non-category rows are harmless.
-            TYPE_CATEGORY -> targetType != TYPE_ADD_CATEGORY
+            // A category header may only "land" on another category header.
+            // The block-move in onItemMoved handles jumping the entire block atomically,
+            // so we never need the header to slide through child rows one-by-one.
+            TYPE_CATEGORY -> targetType == TYPE_CATEGORY
             // A subtask may land on another subtask or a category header
             TYPE_SUBTASK  -> targetType == TYPE_SUBTASK || targetType == TYPE_CATEGORY
-            // Fallback: allow if we somehow don't know the drag type yet
+            // Fallback
             else -> targetType == TYPE_CATEGORY || targetType == TYPE_SUBTASK
         }
     }
 
     override fun onItemMoved(from: Int, to: Int) {
         if (from < 0 || to < 0 || from >= items.size || to >= items.size) return
-        // Record the dragging type on the first move so canDrop stays accurate for the whole gesture
         if (draggingType == -1) draggingType = getItemViewType(from)
-        val item = items.removeAt(from)
-        items.add(to, item)
-        notifyItemMoved(from, to)
+
+        if (draggingType == TYPE_CATEGORY) {
+            // Move the entire block (header + subtasks + AddItemButton) as one unit.
+            // "block" = everything from the header up to (but not including) the next
+            // CategoryItem or AddCategoryButton.
+            val blockEnd = (from + 1 until items.size).firstOrNull {
+                getItemViewType(it) == TYPE_CATEGORY || getItemViewType(it) == TYPE_ADD_CATEGORY
+            } ?: items.size
+
+            val block = items.subList(from, blockEnd).toMutableList()
+            repeat(block.size) { items.removeAt(from) }
+
+            // Find where the target category's block starts after removal.
+            // `to` was the position of the target header before removal; if it was
+            // after `from` it has shifted left by block.size.
+            val insertAt = if (to > from) to - block.size else to
+            items.addAll(insertAt.coerceIn(0, items.size), block)
+            notifyDataSetChanged()
+        } else {
+            // Subtask: single-row move, same as before
+            val item = items.removeAt(from)
+            items.add(to, item)
+            notifyItemMoved(from, to)
+        }
     }
 
     override fun onDragFinished() {
