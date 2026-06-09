@@ -20,6 +20,9 @@ class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
         fun canDrop(position: Int): Boolean
     }
 
+    /** True once at least one successful onMove has occurred in this drag gesture. */
+    private var moved = false
+
     override fun getMovementFlags(
         recyclerView: RecyclerView,
         viewHolder: RecyclerView.ViewHolder
@@ -44,6 +47,7 @@ class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
 
         if (!host.canDrop(to)) return false
         host.onItemMoved(from, to)
+        moved = true
         return true
     }
 
@@ -56,6 +60,11 @@ class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
 
     override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
         super.clearView(recyclerView, viewHolder)
-        host.onDragFinished()
+        // Only commit the drag if at least one move occurred; a cancelled drag
+        // (finger returned to origin) must not corrupt the model or trigger a save.
+        if (moved) {
+            moved = false
+            host.onDragFinished()
+        }
     }
 }
