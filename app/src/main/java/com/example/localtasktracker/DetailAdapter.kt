@@ -264,15 +264,12 @@ class DetailAdapter(
         //    This captures both within-category reorders and cross-category moves.
         //    First clear every category's subtask list, then repopulate in display order.
         for (cat in task.categories) cat.subTasks.clear()
+        var currentCat: TaskCategory? = null
         for (flatItem in items) {
-            if (flatItem is DetailItem.SubTaskItem) {
-                // The category this subtask now belongs to is the last CategoryItem
-                // that appeared before it in the flat list.
-                val ownerCat = items
-                    .subList(0, items.indexOf(flatItem))
-                    .filterIsInstance<DetailItem.CategoryItem>()
-                    .lastOrNull()?.category
-                ownerCat?.subTasks?.add(flatItem.subTask)
+            when (flatItem) {
+                is DetailItem.CategoryItem -> currentCat = flatItem.category
+                is DetailItem.SubTaskItem  -> currentCat?.subTasks?.add(flatItem.subTask)
+                else -> { /* AddItemButton / AddCategoryButton — skip */ }
             }
         }
 
