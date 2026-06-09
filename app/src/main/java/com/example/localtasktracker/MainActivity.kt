@@ -100,7 +100,7 @@ class MainActivity : AppCompatActivity() {
                 val task = Task(tObj.optInt("id", nextTaskId++), tObj.optString("title", "Untitled"))
                 if (task.id > maxTaskId) maxTaskId = task.id
 
-                val cats = tObj.optJSONArray("categories") ?: continue
+                val cats = tObj.optJSONArray("categories") ?: JSONArray()
                 for (ci in 0 until cats.length()) {
                     val cObj = cats.getJSONObject(ci)
                     val cat  = TaskCategory(cObj.optInt("id", nextCategoryId++), cObj.optString("name", "Unnamed"))

@@ -49,6 +49,9 @@ class DetailAdapter(
 
     private val items = mutableListOf<DetailItem>()
 
+    /** True while a programmatic checkbox change is in flight, to avoid re-entrancy. */
+    private var isBindingCheckbox = false
+
     fun refresh() {
         items.clear()
         for (category in task.categories) {
@@ -199,9 +202,11 @@ class DetailAdapter(
                 val subTask = item.subTask
                 vh.nameText.text = subTask.subTaskName
                 vh.checkBox.setOnCheckedChangeListener(null)
+                isBindingCheckbox = true
                 vh.checkBox.isChecked = subTask.isCompleted
+                isBindingCheckbox = false
                 vh.checkBox.setOnCheckedChangeListener { _, checked ->
-                    onSubTaskChecked(subTask, checked)
+                    if (!isBindingCheckbox) onSubTaskChecked(subTask, checked)
                 }
                 vh.optionsBtn.setOnClickListener { onSubTaskOptions(item.category, subTask) }
             }
@@ -248,14 +253,28 @@ class DetailAdapter(
     override fun onDragFinished() {
         draggingType = -1   // reset so next drag starts fresh
 
-        // Read the new category order from the flat display list.
-        // Subtasks are NOT touched here — each category already owns its correct
-        // subtasks in category.subTasks regardless of whether it was expanded or not.
+        // 1. Rebuild category order from the flat list.
         val newCategoryOrder = items
             .filterIsInstance<DetailItem.CategoryItem>()
             .map { it.category }
         task.categories.clear()
         task.categories.addAll(newCategoryOrder)
+
+        // 2. Rebuild each category's subtask list from the flat list.
+        //    This captures both within-category reorders and cross-category moves.
+        //    First clear every category's subtask list, then repopulate in display order.
+        for (cat in task.categories) cat.subTasks.clear()
+        for (flatItem in items) {
+            if (flatItem is DetailItem.SubTaskItem) {
+                // The category this subtask now belongs to is the last CategoryItem
+                // that appeared before it in the flat list.
+                val ownerCat = items
+                    .subList(0, items.indexOf(flatItem))
+                    .filterIsInstance<DetailItem.CategoryItem>()
+                    .lastOrNull()?.category
+                ownerCat?.subTasks?.add(flatItem.subTask)
+            }
+        }
 
         refresh()
         onDragFinished.invoke()

@@ -105,7 +105,7 @@ class TaskAdapter(
             is TaskViewHolder -> {
                 val task = tasks[position]
                 holder.nameText.text = task.title
-                holder.nameText.setOnClickListener { onTaskClick(task) }
+                holder.row.setOnClickListener { onTaskClick(task) }
                 holder.optionsBtn.setOnClickListener { onOptionsClick(task) }
                 val progress = if (task.categories.isEmpty()) 0
                     else task.categories.map { it.computeProgress() }.average().toInt()
