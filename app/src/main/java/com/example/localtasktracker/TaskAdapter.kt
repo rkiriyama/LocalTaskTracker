@@ -157,6 +157,7 @@ class TaskAdapter(
     override fun canDrop(position: Int): Boolean = getItemViewType(position) == TYPE_TASK
 
     override fun onItemMoved(from: Int, to: Int) {
+        if (from < 0 || to < 0 || from >= tasks.size || to >= tasks.size) return
         val item = tasks.removeAt(from)
         tasks.add(to, item)
         notifyItemMoved(from, to)

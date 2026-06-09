@@ -35,6 +35,13 @@ class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
     ): Boolean {
         val from = dragged.bindingAdapterPosition
         val to   = target.bindingAdapterPosition
+
+        // Guard: positions can be NO_POSITION (-1) while animations are in flight,
+        // or stale beyond the current item count after a rapid sequence of moves.
+        val itemCount = recyclerView.adapter?.itemCount ?: return false
+        if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
+        if (from < 0 || from >= itemCount || to < 0 || to >= itemCount) return false
+
         if (!host.canDrop(to)) return false
         host.onItemMoved(from, to)
         return true

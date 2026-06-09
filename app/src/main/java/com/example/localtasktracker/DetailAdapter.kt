@@ -223,6 +223,7 @@ class DetailAdapter(
         getItemViewType(position) == TYPE_CATEGORY || getItemViewType(position) == TYPE_SUBTASK
 
     override fun onItemMoved(from: Int, to: Int) {
+        if (from < 0 || to < 0 || from >= items.size || to >= items.size) return
         val fromItem = items[from]
         val toItem   = items[to]
         val valid = when {
