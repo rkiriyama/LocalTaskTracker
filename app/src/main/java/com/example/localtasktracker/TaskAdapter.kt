@@ -153,6 +153,7 @@ class TaskAdapter(
 
     // ─── DragHost ─────────────────────────────────────────────────────────────
 
+    override fun onDragStarting(position: Int) { /* tasks are always single-row — nothing to collapse */ }
     override fun canDrag(position: Int): Boolean = getItemViewType(position) == TYPE_TASK
     override fun canDrop(position: Int): Boolean = getItemViewType(position) == TYPE_TASK
 
