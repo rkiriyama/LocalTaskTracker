@@ -284,9 +284,12 @@ class DetailAdapter(
         } else if (reorderHelper.isDragging) {
             // ── Subsequent moves of the same category drag ────────────────────
             // List is already headers-only; swap the two rows and keep the model in sync.
+            // Use notifyDataSetChanged (not notifyItemMoved) so ItemTouchHelper's
+            // internal ViewHolder position tracking stays accurate across multiple
+            // consecutive moves in one gesture.
             reorderHelper.swapCategories(from, to)
             syncItemsFromShadow()
-            notifyItemMoved(from, to)
+            notifyDataSetChanged()
         } else {
             // ── Subtask drag (unchanged) ──────────────────────────────────────
             val item = items.removeAt(from)
