@@ -10,6 +10,13 @@ import androidx.recyclerview.widget.RecyclerView
 class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
 
     interface DragHost {
+        /**
+         * Called once when a long-press is detected and a drag is about to begin,
+         * BEFORE any [onItemMoved] calls. The adapter can use this to prepare the
+         * list (e.g. collapse child rows) while ItemTouchHelper has not yet latched
+         * onto a ViewHolder — so incremental notify calls here are safe.
+         */
+        fun onDragStarting(position: Int)
         /** Called continuously while the user drags item from [from] toward [to]. */
         fun onItemMoved(from: Int, to: Int)
         /** Called once when the drag gesture is fully complete (finger lifted). */
@@ -27,7 +34,14 @@ class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
         recyclerView: RecyclerView,
         viewHolder: RecyclerView.ViewHolder
     ): Int {
-        if (!host.canDrag(viewHolder.bindingAdapterPosition)) return 0
+        val position = viewHolder.bindingAdapterPosition
+        if (position == RecyclerView.NO_POSITION) return 0
+        if (!host.canDrag(position)) return 0
+        // Fire onDragStarting here — this is the earliest safe point.
+        // ItemTouchHelper has detected the long-press but has NOT yet taken
+        // ownership of the ViewHolder, so notifyItemRemoved/Inserted calls
+        // issued inside onDragStarting will not interfere with the gesture.
+        host.onDragStarting(position)
         return makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0)
     }
 
@@ -39,8 +53,6 @@ class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
         val from = dragged.bindingAdapterPosition
         val to   = target.bindingAdapterPosition
 
-        // Guard: positions can be NO_POSITION (-1) while animations are in flight,
-        // or stale beyond the current item count after a rapid sequence of moves.
         val itemCount = recyclerView.adapter?.itemCount ?: return false
         if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
         if (from < 0 || from >= itemCount || to < 0 || to >= itemCount) return false
@@ -60,8 +72,6 @@ class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
 
     override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
         super.clearView(recyclerView, viewHolder)
-        // Only commit the drag if at least one move occurred; a cancelled drag
-        // (finger returned to origin) must not corrupt the model or trigger a save.
         if (moved) {
             moved = false
             host.onDragFinished()

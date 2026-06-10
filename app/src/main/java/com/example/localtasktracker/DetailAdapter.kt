@@ -14,25 +14,29 @@ import androidx.recyclerview.widget.RecyclerView
  * RecyclerView adapter for Screen 2 — the flat mixed-type detail list.
  *
  * View types:
- *   TYPE_CATEGORY     — category header row (draggable; see category-drag notes below)
- *   TYPE_SUBTASK      — subtask row (draggable within its category; droppable into another)
+ *   TYPE_CATEGORY     — category header row (draggable)
+ *   TYPE_SUBTASK      — subtask row (draggable within/across categories)
  *   TYPE_ADD_ITEM     — "+ Add Item" button (not draggable)
  *   TYPE_ADD_CATEGORY — "+ Add Category" button (not draggable)
  *
  * ── Category drag design ──────────────────────────────────────────────────────
- * ItemTouchHelper fires onItemMoved one row at a time, so dragging a multi-row
- * block (header + subtasks + add-button) would require complex position arithmetic
- * and fighting the framework.
+ * Category drag mirrors TaskAdapter exactly — notifyItemMoved only, never
+ * notifyDataSetChanged mid-gesture.
  *
- * Instead we mirror exactly what TaskAdapter does for its single-row tasks:
- *   1. On the FIRST move of a category drag, collapse ALL categories to header-only
- *      rows so the list becomes N single-row items — identical to TaskAdapter.
- *   2. Each subsequent onItemMoved is a plain single-row swap (same as TaskAdapter).
- *   3. On drag-finish, rebuild task.categories from the header order, re-expand
- *      whatever was expanded before, and call refresh().
+ * The key insight: ItemTouchHelper loses its grip on the dragged ViewHolder
+ * the moment notifyDataSetChanged is called, making smooth multi-step drags
+ * impossible. The solution is to present exactly one row per category before
+ * the gesture starts, so the drag is always over a flat single-row list.
  *
- * This guarantees: no items are lost, no items change category, and the
- * category simply swaps position with whichever category the user dragged it onto.
+ * Flow:
+ *   1. onDragStarting(position) fires in DragCallback.getMovementFlags — before
+ *      ItemTouchHelper has latched onto anything. If a category row is being
+ *      dragged, we collapse all expanded categories to headers-only using
+ *      incremental notifyItemRemoved calls. ItemTouchHelper never sees a
+ *      notifyDataSetChanged.
+ *   2. onItemMoved(from, to) does removeAt+add on task.categories and calls
+ *      notifyItemMoved — exactly what TaskAdapter does.
+ *   3. onDragFinished re-expands via refresh().
  * ─────────────────────────────────────────────────────────────────────────────
  */
 class DetailAdapter(
@@ -65,11 +69,14 @@ class DetailAdapter(
 
     internal val items = mutableListOf<DetailItem>()
 
-    /** True while a programmatic checkbox change is in flight, to avoid re-entrancy. */
     private var isBindingCheckbox = false
 
-    /** Owns all category-drag state and pure logic (unit-testable without Android). */
+    /** True while a category drag gesture is active. */
+    private var isDraggingCategory = false
+
     internal val reorderHelper = CategoryReorderHelper(task)
+
+    // ─── Public API ───────────────────────────────────────────────────────────
 
     fun refresh() {
         items.clear()
@@ -86,6 +93,34 @@ class DetailAdapter(
         notifyDataSetChanged()
     }
 
+    /**
+     * Collapses every expanded category to its header row only, using incremental
+     * notifyItemRemoved calls so ItemTouchHelper's internal state is never reset.
+     *
+     * Called from onDragStarting before ItemTouchHelper latches onto the ViewHolder.
+     */
+    private fun collapseAllForDrag() {
+        // Walk backwards so removal indices stay valid as we delete rows.
+        for (i in items.indices.reversed()) {
+            val item = items[i]
+            if (item is DetailItem.SubTaskItem || item is DetailItem.AddItemButton) {
+                items.removeAt(i)
+                notifyItemRemoved(i)
+            }
+        }
+        isDraggingCategory = true
+    }
+
+    /**
+     * Returns the index in [items] of the [DetailItem.CategoryItem] for the
+     * category currently at [categoryIndex] in [task].categories.
+     * During a category drag the list is headers-only, so this is simply
+     * [categoryIndex] — but this helper makes the intent explicit.
+     */
+    private fun itemIndexForCategory(categoryIndex: Int): Int = categoryIndex
+
+    // ─── RecyclerView.Adapter ─────────────────────────────────────────────────
+
     override fun getItemCount(): Int = items.size
 
     override fun getItemViewType(position: Int): Int = when (items[position]) {
@@ -98,7 +133,6 @@ class DetailAdapter(
     // ─── ViewHolders ──────────────────────────────────────────────────────────
 
     inner class CategoryViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
-        // order: arrow | badgeFrame | nameText | optionsBtn
         val arrow:      TextView    = row.getChildAt(0) as TextView
         val badgeFrame: FrameLayout = row.getChildAt(1) as FrameLayout
         val nameText:   TextView    = row.getChildAt(2) as TextView
@@ -240,21 +274,29 @@ class DetailAdapter(
 
     // ─── DragHost ─────────────────────────────────────────────────────────────
 
+    override fun onDragStarting(position: Int) {
+        // If a category row is about to be dragged, collapse every expanded category
+        // to its header row using incremental notifyItemRemoved calls.
+        // This fires in getMovementFlags — before ItemTouchHelper has latched onto
+        // any ViewHolder — so these removes do NOT disturb the gesture.
+        if (getItemViewType(position) == TYPE_CATEGORY && !isDraggingCategory) {
+            collapseAllForDrag()
+        }
+        // Subtask drags: nothing to collapse.
+    }
+
     override fun canDrag(position: Int): Boolean {
         val type = getItemViewType(position)
-        // Categories are only draggable when there are 2+ to swap.
         if (type == TYPE_CATEGORY) return reorderHelper.canDragCategory()
         return type == TYPE_SUBTASK
     }
 
     override fun canDrop(position: Int): Boolean {
         val targetType = getItemViewType(position)
-        return if (reorderHelper.isDragging) {
-            // During a category drag the list is headers-only; only category rows exist
-            // (plus the terminal AddCategoryButton which we exclude).
+        return if (isDraggingCategory) {
+            // List is headers-only during a category drag; only allow category targets.
             targetType == TYPE_CATEGORY
         } else {
-            // Subtask drag: may land on another subtask or a category header
             targetType == TYPE_SUBTASK || targetType == TYPE_CATEGORY
         }
     }
@@ -262,75 +304,30 @@ class DetailAdapter(
     override fun onItemMoved(from: Int, to: Int) {
         if (from < 0 || to < 0 || from >= items.size || to >= items.size) return
 
-        if (!reorderHelper.isDragging && getItemViewType(from) == TYPE_CATEGORY) {
-            // ── First move of a category drag ────────────────────────────────
-            // Sync task.categories to the current visual order, then collapse to
-            // headers-only so every category becomes exactly one row.
-            task.categories.clear()
-            task.categories.addAll(
-                items.filterIsInstance<DetailItem.CategoryItem>().map { it.category }
-            )
-            reorderHelper.beginCategoryDrag()
-            collapseToHeadersOnly()
-
-            // After collapse the positions are simpler: each category is at its
-            // index in task.categories. Clamp both positions into the valid header range.
-            val collapsedFrom = from.coerceIn(0, task.categories.size - 1)
-            val collapsedTo   = to.coerceIn(0, task.categories.size - 1)
-            if (collapsedFrom != collapsedTo) {
-                reorderHelper.swapCategories(collapsedFrom, collapsedTo)
-                syncItemsFromShadow()
-            }
-        } else if (reorderHelper.isDragging) {
-            // ── Subsequent moves of the same category drag ────────────────────
-            // List is already headers-only; swap the two rows and keep the model in sync.
-            // Use notifyDataSetChanged (not notifyItemMoved) so ItemTouchHelper's
-            // internal ViewHolder position tracking stays accurate across multiple
-            // consecutive moves in one gesture.
-            reorderHelper.swapCategories(from, to)
-            syncItemsFromShadow()
-            notifyDataSetChanged()
+        if (isDraggingCategory) {
+            // ── Category drag ─────────────────────────────────────────────────
+            // The list is headers-only: one row per category + AddCategoryButton.
+            // Mirror TaskAdapter exactly: removeAt + add + notifyItemMoved.
+            val item = items.removeAt(from)
+            items.add(to, item)
+            notifyItemMoved(from, to)
+            // Keep task.categories in sync.
+            reorderHelper.moveCategory(from, to)
         } else {
-            // ── Subtask drag (unchanged) ──────────────────────────────────────
+            // ── Subtask drag ──────────────────────────────────────────────────
             val item = items.removeAt(from)
             items.add(to, item)
             notifyItemMoved(from, to)
         }
     }
 
-    /**
-     * Rebuilds the [items] list from [reorderHelper].shadowList during a category
-     * drag. Each entry becomes a [DetailItem.CategoryItem] for its category, followed
-     * by the terminal [DetailItem.AddCategoryButton].
-     */
-    private fun syncItemsFromShadow() {
-        items.clear()
-        for (cat in reorderHelper.shadowList) {
-            items.add(DetailItem.CategoryItem(cat))
-        }
-        items.add(DetailItem.AddCategoryButton)
-    }
-
-    /**
-     * Collapses the flat list to category headers only (+ AddCategoryButton).
-     * Called once at the start of a category drag.
-     */
-    private fun collapseToHeadersOnly() {
-        items.clear()
-        for (category in task.categories) {
-            items.add(DetailItem.CategoryItem(category))
-        }
-        items.add(DetailItem.AddCategoryButton)
-        notifyDataSetChanged()
-    }
-
     override fun onDragFinished() {
-        if (reorderHelper.isDragging) {
-            // task.categories is already correct (kept in sync by swapCategories).
-            // Commit, re-expand, and redraw.  Subtask contents are untouched.
-            reorderHelper.commitCategoryDrag()
+        if (isDraggingCategory) {
+            isDraggingCategory = false
+            // task.categories is already correct (kept in sync by moveCategory).
+            // Re-expand whatever was expanded before — subtasks are untouched.
+            refresh()
         } else {
-            // ── Subtask drag finish ───────────────────────────────────────────
             // Rebuild each category's subtask list from the current flat-list order.
             for (cat in task.categories) cat.subTasks.clear()
             var currentCat: TaskCategory? = null
@@ -338,11 +335,11 @@ class DetailAdapter(
                 when (flatItem) {
                     is DetailItem.CategoryItem -> currentCat = flatItem.category
                     is DetailItem.SubTaskItem  -> currentCat?.subTasks?.add(flatItem.subTask)
-                    else -> { /* AddItemButton / AddCategoryButton — skip */ }
+                    else -> { /* skip */ }
                 }
             }
+            refresh()
         }
-        refresh()
         onDragFinished.invoke()
     }
 
