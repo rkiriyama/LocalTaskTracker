@@ -174,17 +174,20 @@ class DetailAdapter(
     }
 
     /**
-     * SubTask row — layout: arrow | checkBox | nameText | addSubItemBtn | optionsBtn
+     * SubTask row — layout: arrow | badgeFrame | checkBox | nameText | addSubItemBtn | optionsBtn
      *
-     * When the subtask has subitems:  arrow=▼/▶, checkBox=GONE,  addSubItemBtn visible in Edit
-     * When plain (no subitems):       arrow=GONE, checkBox=VISIBLE, addSubItemBtn visible in Edit
+     * When the subtask has subitems:  arrow=▼/▶, badgeFrame=VISIBLE, checkBox=GONE
+     * When plain (no subitems):       arrow=GONE, badgeFrame=GONE,    checkBox=VISIBLE
      */
     inner class SubTaskViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
-        val arrow:         TextView = row.getChildAt(0) as TextView
-        val checkBox:      CheckBox = row.getChildAt(1) as CheckBox
-        val nameText:      TextView = row.getChildAt(2) as TextView
-        val addSubItemBtn: Button   = row.getChildAt(3) as Button
-        val optionsBtn:    Button   = row.getChildAt(4) as Button
+        val arrow:         TextView    = row.getChildAt(0) as TextView
+        val badgeFrame:    FrameLayout = row.getChildAt(1) as FrameLayout
+        val checkBox:      CheckBox    = row.getChildAt(2) as CheckBox
+        val nameText:      TextView    = row.getChildAt(3) as TextView
+        val addSubItemBtn: Button      = row.getChildAt(4) as Button
+        val optionsBtn:    Button      = row.getChildAt(5) as Button
+        val ringView:      RingView    = badgeFrame.getChildAt(0) as RingView
+        val pctText:       TextView    = badgeFrame.getChildAt(1) as TextView
     }
 
     inner class AddItemViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
@@ -253,6 +256,7 @@ class DetailAdapter(
                     textSize = 16f
                     setPadding(0, 0, 8, 0)
                 }
+                val badgeFrame = makeBadgeFrame(ctx, 36)
                 val checkBox = CheckBox(ctx)
                 val nameText = TextView(ctx).apply {
                     textSize = 16f
@@ -261,6 +265,7 @@ class DetailAdapter(
                 val addSubItemBtn = Button(ctx).apply { text = "+" }
                 val optionsBtn    = Button(ctx).apply { text = "⋮" }
                 row.addView(arrow)
+                row.addView(badgeFrame)
                 row.addView(checkBox)
                 row.addView(nameText)
                 row.addView(addSubItemBtn)
@@ -351,16 +356,19 @@ class DetailAdapter(
                 if (subTask.hasSubItems()) {
                     // ── Parent mode (mini-category) ───────────────────────────
                     val isExpanded = subTask.id in expandedSubTaskIds
-                    vh.arrow.text      = if (isExpanded) "▼" else "▶"
+                    vh.arrow.text       = if (isExpanded) "▼" else "▶"
                     vh.arrow.visibility = View.VISIBLE
+                    vh.badgeFrame.visibility = View.VISIBLE
+                    applyBadge(vh.ringView, vh.pctText, subTask.computeProgress())
                     vh.checkBox.visibility = View.GONE
                     val toggle = { _: View -> onSubTaskToggle(subTask) }
                     vh.arrow.setOnClickListener(toggle)
                     vh.nameText.setOnClickListener(toggle)
                 } else {
                     // ── Plain checkbox mode ───────────────────────────────────
-                    vh.arrow.visibility    = View.GONE
-                    vh.checkBox.visibility = View.VISIBLE
+                    vh.arrow.visibility      = View.GONE
+                    vh.badgeFrame.visibility = View.GONE
+                    vh.checkBox.visibility   = View.VISIBLE
                     vh.checkBox.setOnCheckedChangeListener(null)
                     isBindingCheckbox = true
                     vh.checkBox.isChecked = subTask.isCompleted
