@@ -135,7 +135,7 @@ class MainActivity : AppCompatActivity() {
         mainLayout.removeAllViews()
 
         val titleText = android.widget.TextView(this).apply {
-            text = "Local Checklist Checker"
+            text = "Checklist"
             textSize = 28f
             gravity = Gravity.CENTER
         }
