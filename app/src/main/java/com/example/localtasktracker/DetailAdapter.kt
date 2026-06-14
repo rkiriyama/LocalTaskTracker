@@ -74,9 +74,19 @@ class DetailAdapter(
     /** True while a category drag gesture is active. */
     private var isDraggingCategory = false
 
+    /** Controls which rows and buttons are visible. False = View mode, True = Edit mode. */
+    var isEditMode: Boolean = false
+        private set
+
     internal val reorderHelper = CategoryReorderHelper(task)
 
     // ─── Public API ───────────────────────────────────────────────────────────
+
+    /** Switch between View and Edit mode and redraw. */
+    fun setEditMode(enabled: Boolean) {
+        isEditMode = enabled
+        refresh()
+    }
 
     fun refresh() {
         items.clear()
@@ -86,10 +96,12 @@ class DetailAdapter(
                 for (subTask in category.subTasks) {
                     items.add(DetailItem.SubTaskItem(category, subTask))
                 }
-                items.add(DetailItem.AddItemButton(category))
+                // "+ Add Item" only visible in Edit mode
+                if (isEditMode) items.add(DetailItem.AddItemButton(category))
             }
         }
-        items.add(DetailItem.AddCategoryButton)
+        // "+ Add Category" only visible in Edit mode
+        if (isEditMode) items.add(DetailItem.AddCategoryButton)
         notifyDataSetChanged()
     }
 
@@ -247,6 +259,7 @@ class DetailAdapter(
                 val toggle = { _: android.view.View -> onCategoryToggle(cat) }
                 vh.arrow.setOnClickListener(toggle)
                 vh.nameText.setOnClickListener(toggle)
+                vh.optionsBtn.visibility = if (isEditMode) android.view.View.VISIBLE else android.view.View.GONE
                 vh.optionsBtn.setOnClickListener { onCategoryOptions(cat) }
                 applyBadge(vh.ringView, vh.pctText, cat.computeProgress())
             }
@@ -261,6 +274,7 @@ class DetailAdapter(
                 vh.checkBox.setOnCheckedChangeListener { _, checked ->
                     if (!isBindingCheckbox) onSubTaskChecked(subTask, checked)
                 }
+                vh.optionsBtn.visibility = if (isEditMode) android.view.View.VISIBLE else android.view.View.GONE
                 vh.optionsBtn.setOnClickListener { onSubTaskOptions(item.category, subTask) }
             }
             is DetailItem.AddItemButton -> {

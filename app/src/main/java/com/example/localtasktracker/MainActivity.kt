@@ -161,11 +161,12 @@ class MainActivity : AppCompatActivity() {
 
     // ─── Screen 2: Task Detail ────────────────────────────────────────────────
 
-    private fun renderTaskDetailScreen(task: Task) {
+    private fun renderTaskDetailScreen(task: Task, startInEditMode: Boolean = false) {
         expandedCategoryIds.clear()
         task.categories.forEach { expandedCategoryIds.add(it.id) }
         mainLayout.removeAllViews()
 
+        // ── Header row: [← Back] [title (flex)] [⋮] [Done (edit only)] ────────
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
@@ -187,8 +188,19 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
+        // Task-level ⋮ button — options differ by mode (wired up after adapter is built)
+        val taskOptionsBtn = Button(this).apply { text = "⋮" }
+
+        // "Done" button — only visible in Edit mode
+        val doneBtn = Button(this).apply {
+            text = "Done"
+            visibility = if (startInEditMode) android.view.View.VISIBLE else android.view.View.GONE
+        }
+
         headerRow.addView(backBtn)
         headerRow.addView(titleText)
+        headerRow.addView(taskOptionsBtn)
+        headerRow.addView(doneBtn)
 
         val recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
@@ -218,8 +230,74 @@ class MainActivity : AppCompatActivity() {
         )
 
         recyclerView.adapter = adapter
-        adapter.refresh()
+
+        // Apply initial mode before first draw
+        if (startInEditMode) adapter.setEditMode(true) else adapter.refresh()
+
         ItemTouchHelper(DragCallback(adapter)).attachToRecyclerView(recyclerView)
+
+        // ── Task ⋮ options ────────────────────────────────────────────────────
+        taskOptionsBtn.setOnClickListener {
+            if (adapter.isEditMode) {
+                // Edit mode: full set of options
+                AlertDialog.Builder(this)
+                    .setTitle(task.title)
+                    .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Duplicate", "Delete")) { _, which ->
+                        when (which) {
+                            0 -> showRenameTaskDialog(task, recyclerView, titleText)
+                            1 -> {
+                                task.categories.forEach { cat -> cat.subTasks.forEach { it.changeSubTaskStatus(true) } }
+                                saveData()
+                                adapter.refresh()
+                            }
+                            2 -> {
+                                task.categories.forEach { cat -> cat.subTasks.forEach { it.changeSubTaskStatus(false) } }
+                                saveData()
+                                adapter.refresh()
+                            }
+                            3 -> showDuplicateTaskDialog(task)
+                            4 -> AlertDialog.Builder(this)
+                                    .setTitle("Delete \"${task.title}\"?")
+                                    .setMessage("This will permanently delete the checklist and all its contents.")
+                                    .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
+                                    .setNegativeButton("Cancel", null)
+                                    .show()
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            } else {
+                // View mode: read-friendly options + entry point to Edit
+                AlertDialog.Builder(this)
+                    .setTitle(task.title)
+                    .setItems(arrayOf("Edit", "Check All", "Uncheck All")) { _, which ->
+                        when (which) {
+                            0 -> {
+                                adapter.setEditMode(true)
+                                doneBtn.visibility = android.view.View.VISIBLE
+                            }
+                            1 -> {
+                                task.categories.forEach { cat -> cat.subTasks.forEach { it.changeSubTaskStatus(true) } }
+                                saveData()
+                                adapter.refresh()
+                            }
+                            2 -> {
+                                task.categories.forEach { cat -> cat.subTasks.forEach { it.changeSubTaskStatus(false) } }
+                                saveData()
+                                adapter.refresh()
+                            }
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+
+        // ── Done button ───────────────────────────────────────────────────────
+        doneBtn.setOnClickListener {
+            adapter.setEditMode(false)
+            doneBtn.visibility = android.view.View.GONE
+        }
     }
 
     private fun refreshDetail(recyclerView: RecyclerView) {
@@ -326,6 +404,25 @@ class MainActivity : AppCompatActivity() {
                     task.renameTask(newName)
                     saveData()
                     renderTaskListScreen()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+        focusInput(dialog, input, selectAll = true)
+    }
+
+    // Overload used from the detail screen — stays on the screen and updates the title in place.
+    private fun showRenameTaskDialog(task: Task, recyclerView: RecyclerView, titleText: android.widget.TextView) {
+        val input = EditText(this).apply { setText(task.title) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Rename Checklist")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val newName = input.text.toString().trim()
+                if (newName.isNotEmpty()) {
+                    task.renameTask(newName)
+                    titleText.text = task.title
+                    saveData()
                 }
             }
             .setNegativeButton("Cancel", null)
