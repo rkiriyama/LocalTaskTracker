@@ -2,6 +2,7 @@ package com.example.localtasktracker
 
 import android.graphics.Color
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CheckBox
@@ -14,38 +15,35 @@ import androidx.recyclerview.widget.RecyclerView
  * RecyclerView adapter for Screen 2 — the flat mixed-type detail list.
  *
  * View types:
- *   TYPE_CATEGORY     — category header row (draggable)
- *   TYPE_SUBTASK      — subtask row (draggable within/across categories)
- *   TYPE_ADD_ITEM     — "+ Add Item" button (not draggable)
- *   TYPE_ADD_CATEGORY — "+ Add Category" button (not draggable)
+ *   TYPE_CATEGORY      — category header row (draggable)
+ *   TYPE_SUBTASK       — subtask row; acts as mini-category when it has subitems
+ *   TYPE_ADD_ITEM      — "+ Add Item" button under a category (Edit mode only)
+ *   TYPE_ADD_CATEGORY  — "+ Add Category" button at the bottom (Edit mode only)
+ *   TYPE_SUBITEM       — subitem row under a parent subtask (draggable within parent)
+ *   TYPE_ADD_SUBITEM   — "+ Add Subitem" button under a parent subtask (Edit mode only)
  *
- * ── Category drag design ──────────────────────────────────────────────────────
- * Category drag mirrors TaskAdapter exactly — notifyItemMoved only, never
- * notifyDataSetChanged mid-gesture.
- *
- * The key insight: ItemTouchHelper loses its grip on the dragged ViewHolder
- * the moment notifyDataSetChanged is called, making smooth multi-step drags
- * impossible. The solution is to present exactly one row per category before
- * the gesture starts, so the drag is always over a flat single-row list.
- *
- * Flow:
- *   1. onDragStarting(position) fires in DragCallback.getMovementFlags — before
- *      ItemTouchHelper has latched onto anything. If a category row is being
- *      dragged, we collapse all expanded categories to headers-only using
- *      incremental notifyItemRemoved calls. ItemTouchHelper never sees a
- *      notifyDataSetChanged.
- *   2. onItemMoved(from, to) does removeAt+add on task.categories and calls
- *      notifyItemMoved — exactly what TaskAdapter does.
- *   3. onDragFinished re-expands via refresh().
+ * ── Drag design ───────────────────────────────────────────────────────────────
+ * Category drag  : onDragStarting collapses all child rows via incremental
+ *                  notifyItemRemoved so ItemTouchHelper never sees notifyDataSetChanged.
+ *                  Each subsequent onItemMoved is a plain removeAt+add+notifyItemMoved.
+ * Subtask drag   : single-row moves; can cross category boundaries.
+ * Subitem drag   : onDragStarting collapses all OTHER parent subtasks' subitems so
+ *                  only the dragged subitem's siblings remain visible. Subitems can
+ *                  only land on TYPE_SUBITEM rows (within the same parent block).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 class DetailAdapter(
     private val task: Task,
     private val expandedCategoryIds: MutableSet<Int>,
+    private val expandedSubTaskIds: MutableSet<Int>,
     private val onCategoryToggle: (TaskCategory) -> Unit,
     private val onCategoryOptions: (TaskCategory) -> Unit,
+    private val onSubTaskToggle: (SubTask) -> Unit,
     private val onSubTaskChecked: (SubTask, Boolean) -> Unit,
     private val onSubTaskOptions: (TaskCategory, SubTask) -> Unit,
+    private val onAddSubItem: (SubTask) -> Unit,
+    private val onSubItemChecked: (SubItem, Boolean) -> Unit,
+    private val onSubItemOptions: (SubTask, SubItem) -> Unit,
     private val onAddCategory: () -> Unit,
     private val onAddItem: (TaskCategory) -> Unit,
     private val onDragFinished: () -> Unit
@@ -56,6 +54,8 @@ class DetailAdapter(
         const val TYPE_SUBTASK      = 1
         const val TYPE_ADD_ITEM     = 2
         const val TYPE_ADD_CATEGORY = 3
+        const val TYPE_SUBITEM      = 4
+        const val TYPE_ADD_SUBITEM  = 5
     }
 
     // ─── Flat item model ──────────────────────────────────────────────────────
@@ -65,6 +65,8 @@ class DetailAdapter(
         data class SubTaskItem(val category: TaskCategory, val subTask: SubTask) : DetailItem()
         data class AddItemButton(val category: TaskCategory) : DetailItem()
         object AddCategoryButton : DetailItem()
+        data class SubItemRow(val subTask: SubTask, val subItem: SubItem) : DetailItem()
+        data class AddSubItemButton(val subTask: SubTask) : DetailItem()
     }
 
     internal val items = mutableListOf<DetailItem>()
@@ -74,6 +76,9 @@ class DetailAdapter(
     /** True while a category drag gesture is active. */
     private var isDraggingCategory = false
 
+    /** True while a subitem drag gesture is active. */
+    private var isDraggingSubItem = false
+
     /** Controls which rows and buttons are visible. False = View mode, True = Edit mode. */
     var isEditMode: Boolean = false
         private set
@@ -82,7 +87,6 @@ class DetailAdapter(
 
     // ─── Public API ───────────────────────────────────────────────────────────
 
-    /** Switch between View and Edit mode and redraw. */
     fun setEditMode(enabled: Boolean) {
         isEditMode = enabled
         refresh()
@@ -95,27 +99,27 @@ class DetailAdapter(
             if (category.id in expandedCategoryIds) {
                 for (subTask in category.subTasks) {
                     items.add(DetailItem.SubTaskItem(category, subTask))
+                    if (subTask.hasSubItems() && subTask.id in expandedSubTaskIds) {
+                        for (subItem in subTask.subItems) {
+                            items.add(DetailItem.SubItemRow(subTask, subItem))
+                        }
+                        if (isEditMode) items.add(DetailItem.AddSubItemButton(subTask))
+                    }
                 }
-                // "+ Add Item" only visible in Edit mode
                 if (isEditMode) items.add(DetailItem.AddItemButton(category))
             }
         }
-        // "+ Add Category" only visible in Edit mode
         if (isEditMode) items.add(DetailItem.AddCategoryButton)
         notifyDataSetChanged()
     }
 
-    /**
-     * Collapses every expanded category to its header row only, using incremental
-     * notifyItemRemoved calls so ItemTouchHelper's internal state is never reset.
-     *
-     * Called from onDragStarting before ItemTouchHelper latches onto the ViewHolder.
-     */
-    private fun collapseAllForDrag() {
-        // Walk backwards so removal indices stay valid as we delete rows.
+    // ─── Collapse helpers for drag ────────────────────────────────────────────
+
+    /** Collapses all category child rows (subtasks, subitems, add-buttons) for category drag. */
+    private fun collapseAllForCategoryDrag() {
         for (i in items.indices.reversed()) {
             val item = items[i]
-            if (item is DetailItem.SubTaskItem || item is DetailItem.AddItemButton) {
+            if (item !is DetailItem.CategoryItem && item !is DetailItem.AddCategoryButton) {
                 items.removeAt(i)
                 notifyItemRemoved(i)
             }
@@ -124,12 +128,25 @@ class DetailAdapter(
     }
 
     /**
-     * Returns the index in [items] of the [DetailItem.CategoryItem] for the
-     * category currently at [categoryIndex] in [task].categories.
-     * During a category drag the list is headers-only, so this is simply
-     * [categoryIndex] — but this helper makes the intent explicit.
+     * For a subitem drag: collapses subitems belonging to every parent subtask
+     * OTHER than [parentSubTask], so only that parent's subitems are visible.
+     * The dragged subitem's siblings stay in the list — drag is within-parent only.
      */
-    private fun itemIndexForCategory(categoryIndex: Int): Int = categoryIndex
+    private fun collapseOtherSubItemsForDrag(parentSubTask: SubTask) {
+        for (i in items.indices.reversed()) {
+            val item = items[i]
+            val belongsToOtherParent = when (item) {
+                is DetailItem.SubItemRow      -> item.subTask.id != parentSubTask.id
+                is DetailItem.AddSubItemButton -> item.subTask.id != parentSubTask.id
+                else -> false
+            }
+            if (belongsToOtherParent) {
+                items.removeAt(i)
+                notifyItemRemoved(i)
+            }
+        }
+        isDraggingSubItem = true
+    }
 
     // ─── RecyclerView.Adapter ─────────────────────────────────────────────────
 
@@ -140,11 +157,14 @@ class DetailAdapter(
         is DetailItem.SubTaskItem       -> TYPE_SUBTASK
         is DetailItem.AddItemButton     -> TYPE_ADD_ITEM
         is DetailItem.AddCategoryButton -> TYPE_ADD_CATEGORY
+        is DetailItem.SubItemRow        -> TYPE_SUBITEM
+        is DetailItem.AddSubItemButton  -> TYPE_ADD_SUBITEM
     }
 
     // ─── ViewHolders ──────────────────────────────────────────────────────────
 
     inner class CategoryViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
+        // arrow | badgeFrame | nameText | optionsBtn
         val arrow:      TextView    = row.getChildAt(0) as TextView
         val badgeFrame: FrameLayout = row.getChildAt(1) as FrameLayout
         val nameText:   TextView    = row.getChildAt(2) as TextView
@@ -153,10 +173,18 @@ class DetailAdapter(
         val pctText:    TextView    = badgeFrame.getChildAt(1) as TextView
     }
 
+    /**
+     * SubTask row — layout: arrow | checkBox | nameText | addSubItemBtn | optionsBtn
+     *
+     * When the subtask has subitems:  arrow=▼/▶, checkBox=GONE,  addSubItemBtn visible in Edit
+     * When plain (no subitems):       arrow=GONE, checkBox=VISIBLE, addSubItemBtn visible in Edit
+     */
     inner class SubTaskViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
-        val checkBox:   CheckBox = row.getChildAt(0) as CheckBox
-        val nameText:   TextView = row.getChildAt(1) as TextView
-        val optionsBtn: Button   = row.getChildAt(2) as Button
+        val arrow:         TextView = row.getChildAt(0) as TextView
+        val checkBox:      CheckBox = row.getChildAt(1) as CheckBox
+        val nameText:      TextView = row.getChildAt(2) as TextView
+        val addSubItemBtn: Button   = row.getChildAt(3) as Button
+        val optionsBtn:    Button   = row.getChildAt(4) as Button
     }
 
     inner class AddItemViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
@@ -164,6 +192,18 @@ class DetailAdapter(
     }
 
     inner class AddCategoryViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
+        val addBtn: Button = row.getChildAt(0) as Button
+    }
+
+    /** SubItem row — mirrors SubTaskViewHolder but no arrow/addSubItemBtn. */
+    inner class SubItemViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
+        // checkBox | nameText | optionsBtn
+        val checkBox:   CheckBox = row.getChildAt(0) as CheckBox
+        val nameText:   TextView = row.getChildAt(1) as TextView
+        val optionsBtn: Button   = row.getChildAt(2) as Button
+    }
+
+    inner class AddSubItemViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
         val addBtn: Button = row.getChildAt(0) as Button
     }
 
@@ -176,10 +216,11 @@ class DetailAdapter(
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
         return when (viewType) {
+
             TYPE_CATEGORY -> {
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
-                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    gravity = Gravity.CENTER_VERTICAL
                     setPadding(0, 16, 0, 16)
                     layoutParams = matchWrap
                 }
@@ -191,9 +232,7 @@ class DetailAdapter(
                 val nameText = TextView(ctx).apply {
                     textSize = 18f
                     setPadding(12, 0, 0, 0)
-                    layoutParams = LinearLayout.LayoutParams(
-                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                    )
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 }
                 val optionsBtn = Button(ctx).apply { text = "⋮" }
                 row.addView(arrow)
@@ -202,26 +241,33 @@ class DetailAdapter(
                 row.addView(optionsBtn)
                 CategoryViewHolder(row)
             }
+
             TYPE_SUBTASK -> {
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
-                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    gravity = Gravity.CENTER_VERTICAL
                     setPadding(60, 8, 0, 8)
                     layoutParams = matchWrap
+                }
+                val arrow = TextView(ctx).apply {
+                    textSize = 16f
+                    setPadding(0, 0, 8, 0)
                 }
                 val checkBox = CheckBox(ctx)
                 val nameText = TextView(ctx).apply {
                     textSize = 16f
-                    layoutParams = LinearLayout.LayoutParams(
-                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
-                    )
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 }
-                val optionsBtn = Button(ctx).apply { text = "⋮" }
+                val addSubItemBtn = Button(ctx).apply { text = "+" }
+                val optionsBtn    = Button(ctx).apply { text = "⋮" }
+                row.addView(arrow)
                 row.addView(checkBox)
                 row.addView(nameText)
+                row.addView(addSubItemBtn)
                 row.addView(optionsBtn)
                 SubTaskViewHolder(row)
             }
+
             TYPE_ADD_ITEM -> {
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -232,7 +278,8 @@ class DetailAdapter(
                 row.addView(addBtn)
                 AddItemViewHolder(row)
             }
-            else -> {
+
+            TYPE_ADD_CATEGORY -> {
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     setPadding(0, 8, 0, 16)
@@ -242,6 +289,37 @@ class DetailAdapter(
                 row.addView(addBtn)
                 AddCategoryViewHolder(row)
             }
+
+            TYPE_SUBITEM -> {
+                val row = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    // Indent deeper than subtasks (subtasks are at 60)
+                    setPadding(120, 8, 0, 8)
+                    layoutParams = matchWrap
+                }
+                val checkBox   = CheckBox(ctx)
+                val nameText   = TextView(ctx).apply {
+                    textSize = 15f
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+                val optionsBtn = Button(ctx).apply { text = "⋮" }
+                row.addView(checkBox)
+                row.addView(nameText)
+                row.addView(optionsBtn)
+                SubItemViewHolder(row)
+            }
+
+            else -> { // TYPE_ADD_SUBITEM
+                val row = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(140, 8, 0, 16)
+                    layoutParams = matchWrap
+                }
+                val addBtn = Button(ctx).apply { text = "+ Add Subitem" }
+                row.addView(addBtn)
+                AddSubItemViewHolder(row)
+            }
         }
     }
 
@@ -249,39 +327,81 @@ class DetailAdapter(
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         when (val item = items[position]) {
+
             is DetailItem.CategoryItem -> {
-                val vh = holder as CategoryViewHolder
+                val vh  = holder as CategoryViewHolder
                 val cat = item.category
                 val isExpanded = cat.id in expandedCategoryIds
                 vh.arrow.text = if (isExpanded) "▼" else "▶"
                 vh.nameText.text = cat.categoryName
                 vh.row.setBackgroundColor(Color.TRANSPARENT)
-                val toggle = { _: android.view.View -> onCategoryToggle(cat) }
+                val toggle = { _: View -> onCategoryToggle(cat) }
                 vh.arrow.setOnClickListener(toggle)
                 vh.nameText.setOnClickListener(toggle)
-                vh.optionsBtn.visibility = if (isEditMode) android.view.View.VISIBLE else android.view.View.GONE
+                vh.optionsBtn.visibility = if (isEditMode) View.VISIBLE else View.GONE
                 vh.optionsBtn.setOnClickListener { onCategoryOptions(cat) }
                 applyBadge(vh.ringView, vh.pctText, cat.computeProgress())
             }
+
             is DetailItem.SubTaskItem -> {
-                val vh = holder as SubTaskViewHolder
+                val vh      = holder as SubTaskViewHolder
                 val subTask = item.subTask
                 vh.nameText.text = subTask.subTaskName
-                vh.checkBox.setOnCheckedChangeListener(null)
-                isBindingCheckbox = true
-                vh.checkBox.isChecked = subTask.isCompleted
-                isBindingCheckbox = false
-                vh.checkBox.setOnCheckedChangeListener { _, checked ->
-                    if (!isBindingCheckbox) onSubTaskChecked(subTask, checked)
+
+                if (subTask.hasSubItems()) {
+                    // ── Parent mode (mini-category) ───────────────────────────
+                    val isExpanded = subTask.id in expandedSubTaskIds
+                    vh.arrow.text      = if (isExpanded) "▼" else "▶"
+                    vh.arrow.visibility = View.VISIBLE
+                    vh.checkBox.visibility = View.GONE
+                    val toggle = { _: View -> onSubTaskToggle(subTask) }
+                    vh.arrow.setOnClickListener(toggle)
+                    vh.nameText.setOnClickListener(toggle)
+                } else {
+                    // ── Plain checkbox mode ───────────────────────────────────
+                    vh.arrow.visibility    = View.GONE
+                    vh.checkBox.visibility = View.VISIBLE
+                    vh.checkBox.setOnCheckedChangeListener(null)
+                    isBindingCheckbox = true
+                    vh.checkBox.isChecked = subTask.isCompleted
+                    isBindingCheckbox = false
+                    vh.checkBox.setOnCheckedChangeListener { _, checked ->
+                        if (!isBindingCheckbox) onSubTaskChecked(subTask, checked)
+                    }
+                    vh.nameText.setOnClickListener(null)
                 }
-                vh.optionsBtn.visibility = if (isEditMode) android.view.View.VISIBLE else android.view.View.GONE
+
+                vh.addSubItemBtn.visibility = if (isEditMode) View.VISIBLE else View.GONE
+                vh.addSubItemBtn.setOnClickListener { onAddSubItem(subTask) }
+                vh.optionsBtn.visibility = if (isEditMode) View.VISIBLE else View.GONE
                 vh.optionsBtn.setOnClickListener { onSubTaskOptions(item.category, subTask) }
             }
+
+            is DetailItem.SubItemRow -> {
+                val vh      = holder as SubItemViewHolder
+                val subItem = item.subItem
+                vh.nameText.text = subItem.subItemName
+                vh.checkBox.setOnCheckedChangeListener(null)
+                isBindingCheckbox = true
+                vh.checkBox.isChecked = subItem.isCompleted
+                isBindingCheckbox = false
+                vh.checkBox.setOnCheckedChangeListener { _, checked ->
+                    if (!isBindingCheckbox) onSubItemChecked(subItem, checked)
+                }
+                vh.optionsBtn.visibility = if (isEditMode) View.VISIBLE else View.GONE
+                vh.optionsBtn.setOnClickListener { onSubItemOptions(item.subTask, subItem) }
+            }
+
             is DetailItem.AddItemButton -> {
                 (holder as AddItemViewHolder).addBtn.setOnClickListener { onAddItem(item.category) }
             }
+
             is DetailItem.AddCategoryButton -> {
                 (holder as AddCategoryViewHolder).addBtn.setOnClickListener { onAddCategory() }
+            }
+
+            is DetailItem.AddSubItemButton -> {
+                (holder as AddSubItemViewHolder).addBtn.setOnClickListener { onAddSubItem(item.subTask) }
             }
         }
     }
@@ -289,70 +409,101 @@ class DetailAdapter(
     // ─── DragHost ─────────────────────────────────────────────────────────────
 
     override fun onDragStarting(position: Int) {
-        // If a category row is about to be dragged, collapse every expanded category
-        // to its header row using incremental notifyItemRemoved calls.
-        // This fires in getMovementFlags — before ItemTouchHelper has latched onto
-        // any ViewHolder — so these removes do NOT disturb the gesture.
-        if (getItemViewType(position) == TYPE_CATEGORY && !isDraggingCategory) {
-            collapseAllForDrag()
+        when (getItemViewType(position)) {
+            TYPE_CATEGORY -> {
+                if (!isDraggingCategory) collapseAllForCategoryDrag()
+            }
+            TYPE_SUBITEM -> {
+                if (!isDraggingSubItem) {
+                    val parentSubTask = (items[position] as DetailItem.SubItemRow).subTask
+                    collapseOtherSubItemsForDrag(parentSubTask)
+                }
+            }
+            // TYPE_SUBTASK: nothing to collapse
         }
-        // Subtask drags: nothing to collapse.
     }
 
     override fun canDrag(position: Int): Boolean {
-        val type = getItemViewType(position)
-        if (type == TYPE_CATEGORY) return reorderHelper.canDragCategory()
-        return type == TYPE_SUBTASK
+        return when (getItemViewType(position)) {
+            TYPE_CATEGORY -> reorderHelper.canDragCategory()
+            TYPE_SUBTASK  -> true
+            TYPE_SUBITEM  -> {
+                // Only draggable when there are 2+ siblings to reorder
+                val subTask = (items[position] as DetailItem.SubItemRow).subTask
+                subTask.subItems.size >= 2
+            }
+            else -> false
+        }
     }
 
     override fun canDrop(position: Int): Boolean {
         val targetType = getItemViewType(position)
-        return if (isDraggingCategory) {
-            // List is headers-only during a category drag; only allow category targets.
-            targetType == TYPE_CATEGORY
-        } else {
-            targetType == TYPE_SUBTASK || targetType == TYPE_CATEGORY
+        return when {
+            isDraggingCategory -> targetType == TYPE_CATEGORY
+            isDraggingSubItem  -> targetType == TYPE_SUBITEM
+            else               -> targetType == TYPE_SUBTASK || targetType == TYPE_CATEGORY
         }
     }
 
     override fun onItemMoved(from: Int, to: Int) {
         if (from < 0 || to < 0 || from >= items.size || to >= items.size) return
 
-        if (isDraggingCategory) {
-            // ── Category drag ─────────────────────────────────────────────────
-            // The list is headers-only: one row per category + AddCategoryButton.
-            // Mirror TaskAdapter exactly: removeAt + add + notifyItemMoved.
-            val item = items.removeAt(from)
-            items.add(to, item)
-            notifyItemMoved(from, to)
-            // Keep task.categories in sync.
-            reorderHelper.moveCategory(from, to)
-        } else {
-            // ── Subtask drag ──────────────────────────────────────────────────
-            val item = items.removeAt(from)
-            items.add(to, item)
-            notifyItemMoved(from, to)
+        when {
+            isDraggingCategory -> {
+                val item = items.removeAt(from)
+                items.add(to, item)
+                notifyItemMoved(from, to)
+                reorderHelper.moveCategory(from, to)
+            }
+            isDraggingSubItem -> {
+                val item = items.removeAt(from)
+                items.add(to, item)
+                notifyItemMoved(from, to)
+            }
+            else -> {
+                // Subtask drag
+                val item = items.removeAt(from)
+                items.add(to, item)
+                notifyItemMoved(from, to)
+            }
         }
     }
 
     override fun onDragFinished() {
-        if (isDraggingCategory) {
-            isDraggingCategory = false
-            // task.categories is already correct (kept in sync by moveCategory).
-            // Re-expand whatever was expanded before — subtasks are untouched.
-            refresh()
-        } else {
-            // Rebuild each category's subtask list from the current flat-list order.
-            for (cat in task.categories) cat.subTasks.clear()
-            var currentCat: TaskCategory? = null
-            for (flatItem in items) {
-                when (flatItem) {
-                    is DetailItem.CategoryItem -> currentCat = flatItem.category
-                    is DetailItem.SubTaskItem  -> currentCat?.subTasks?.add(flatItem.subTask)
-                    else -> { /* skip */ }
-                }
+        when {
+            isDraggingCategory -> {
+                isDraggingCategory = false
+                refresh()
             }
-            refresh()
+            isDraggingSubItem -> {
+                isDraggingSubItem = false
+                // Rebuild each subtask's subItems list from the flat list order
+                val seenSubTasks = mutableSetOf<Int>()
+                for (flatItem in items) {
+                    if (flatItem is DetailItem.SubItemRow) {
+                        val st = flatItem.subTask
+                        if (st.id !in seenSubTasks) {
+                            st.subItems.clear()
+                            seenSubTasks.add(st.id)
+                        }
+                        st.subItems.add(flatItem.subItem)
+                    }
+                }
+                refresh()
+            }
+            else -> {
+                // Subtask drag — rebuild each category's subTask list
+                for (cat in task.categories) cat.subTasks.clear()
+                var currentCat: TaskCategory? = null
+                for (flatItem in items) {
+                    when (flatItem) {
+                        is DetailItem.CategoryItem -> currentCat = flatItem.category
+                        is DetailItem.SubTaskItem  -> currentCat?.subTasks?.add(flatItem.subTask)
+                        else -> { /* skip */ }
+                    }
+                }
+                refresh()
+            }
         }
         onDragFinished.invoke()
     }
@@ -373,7 +524,7 @@ class DetailAdapter(
         val label = TextView(ctx).apply {
             gravity = Gravity.CENTER
             textSize = 8f
-            setTextColor(android.graphics.Color.WHITE)
+            setTextColor(Color.WHITE)
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
