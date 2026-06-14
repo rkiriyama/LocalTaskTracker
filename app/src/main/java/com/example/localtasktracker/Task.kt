@@ -36,10 +36,13 @@ data class Task(
     fun computeProgress(): Int {
         // Collect progress values from all sources:
         // - each category contributes its own computeProgress() (0‥100)
-        // - each uncategorized subtask contributes 0 or 100
+        // - uncategorized subtasks with subitems contribute their subitem % 
+        // - plain uncategorized subtasks contribute 0 or 100
         val values = mutableListOf<Int>()
         categories.forEach { values.add(it.computeProgress()) }
-        uncategorizedTasks.forEach { values.add(if (it.isCompleted) 100 else 0) }
+        uncategorizedTasks.forEach { sub ->
+            values.add(if (sub.hasSubItems()) sub.computeProgress() else if (sub.isCompleted) 100 else 0)
+        }
         if (values.isEmpty()) return 0
         return values.average().roundToInt()
     }

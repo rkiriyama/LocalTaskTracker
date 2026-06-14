@@ -33,11 +33,14 @@ data class TaskCategory(
     }
 
     fun computeProgress(): Int {
-        if (subTasks.isEmpty()) {
-            return 0
+        if (subTasks.isEmpty()) return 0
+        // Subtasks with subitems contribute their subitem completion percentage.
+        // Plain subtasks (no subitems) contribute 0 or 100 based on isCompleted.
+        val values = subTasks.map { sub ->
+            if (sub.hasSubItems()) sub.computeProgress()
+            else if (sub.isCompleted) 100 else 0
         }
-        val progress = (getTasksCompleted().toDouble() / subTasks.size) * 100
-        return progress.roundToInt()
+        return values.average().roundToInt()
     }
 
     fun addSubTask(newSubTask: SubTask): Boolean {
