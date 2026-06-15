@@ -30,6 +30,9 @@ class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
     /** True once at least one successful onMove has occurred in this drag gesture. */
     private var moved = false
 
+    /** The position being long-pressed, or NO_POSITION when idle. */
+    private var pendingDragPosition = RecyclerView.NO_POSITION
+
     override fun getMovementFlags(
         recyclerView: RecyclerView,
         viewHolder: RecyclerView.ViewHolder
@@ -37,12 +40,23 @@ class DragCallback(private val host: DragHost) : ItemTouchHelper.Callback() {
         val position = viewHolder.bindingAdapterPosition
         if (position == RecyclerView.NO_POSITION) return 0
         if (!host.canDrag(position)) return 0
-        // Fire onDragStarting here — this is the earliest safe point.
-        // ItemTouchHelper has detected the long-press but has NOT yet taken
-        // ownership of the ViewHolder, so notifyItemRemoved/Inserted calls
-        // issued inside onDragStarting will not interfere with the gesture.
-        host.onDragStarting(position)
         return makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0)
+    }
+
+    override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
+        super.onSelectedChanged(viewHolder, actionState)
+        // onSelectedChanged with ACTION_STATE_DRAG fires exactly once when the
+        // long-press threshold is crossed and ItemTouchHelper takes ownership of
+        // the ViewHolder. This is the correct and only place to call onDragStarting.
+        if (actionState == ItemTouchHelper.ACTION_STATE_DRAG && viewHolder != null) {
+            val position = viewHolder.bindingAdapterPosition
+            if (position != RecyclerView.NO_POSITION) {
+                pendingDragPosition = position
+                host.onDragStarting(position)
+            }
+        } else if (actionState == ItemTouchHelper.ACTION_STATE_IDLE) {
+            pendingDragPosition = RecyclerView.NO_POSITION
+        }
     }
 
     override fun onMove(

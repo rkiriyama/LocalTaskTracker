@@ -71,9 +71,7 @@ class DetailAdapter(
 
     internal val items = mutableListOf<DetailItem>()
 
-    private var isBindingCheckbox = false
-
-    /** True while a category drag gesture is active. */
+/** True while a category drag gesture is active. */
     private var isDraggingCategory = false
 
     /** True while a subitem drag gesture is active. */
@@ -356,27 +354,29 @@ class DetailAdapter(
                 if (subTask.hasSubItems()) {
                     // ── Parent mode (mini-category) ───────────────────────────
                     val isExpanded = subTask.id in expandedSubTaskIds
-                    vh.arrow.text       = if (isExpanded) "▼" else "▶"
-                    vh.arrow.visibility = View.VISIBLE
+                    vh.arrow.text            = if (isExpanded) "▼" else "▶"
+                    vh.arrow.visibility      = View.VISIBLE
                     vh.badgeFrame.visibility = View.VISIBLE
                     applyBadge(vh.ringView, vh.pctText, subTask.computeProgress())
-                    vh.checkBox.visibility = View.GONE
+                    vh.checkBox.visibility   = View.GONE
+                    vh.checkBox.setOnCheckedChangeListener(null)
                     val toggle = { _: View -> onSubTaskToggle(subTask) }
                     vh.arrow.setOnClickListener(toggle)
                     vh.nameText.setOnClickListener(toggle)
                 } else {
                     // ── Plain checkbox mode ───────────────────────────────────
                     vh.arrow.visibility      = View.GONE
+                    vh.arrow.setOnClickListener(null)
                     vh.badgeFrame.visibility = View.GONE
                     vh.checkBox.visibility   = View.VISIBLE
-                    vh.checkBox.setOnCheckedChangeListener(null)
-                    isBindingCheckbox = true
-                    vh.checkBox.isChecked = subTask.isCompleted
-                    isBindingCheckbox = false
-                    vh.checkBox.setOnCheckedChangeListener { _, checked ->
-                        if (!isBindingCheckbox) onSubTaskChecked(subTask, checked)
-                    }
                     vh.nameText.setOnClickListener(null)
+                    // Clear before setting isChecked so the recycled ViewHolder's
+                    // old listener cannot fire during rebind.
+                    vh.checkBox.setOnCheckedChangeListener(null)
+                    vh.checkBox.isChecked = subTask.isCompleted
+                    vh.checkBox.setOnCheckedChangeListener { _, checked ->
+                        onSubTaskChecked(subTask, checked)
+                    }
                 }
 
                 vh.addSubItemBtn.visibility = if (isEditMode) View.VISIBLE else View.GONE
@@ -389,12 +389,11 @@ class DetailAdapter(
                 val vh      = holder as SubItemViewHolder
                 val subItem = item.subItem
                 vh.nameText.text = subItem.subItemName
+                // Clear before setting isChecked — same recycling safety as above.
                 vh.checkBox.setOnCheckedChangeListener(null)
-                isBindingCheckbox = true
                 vh.checkBox.isChecked = subItem.isCompleted
-                isBindingCheckbox = false
                 vh.checkBox.setOnCheckedChangeListener { _, checked ->
-                    if (!isBindingCheckbox) onSubItemChecked(subItem, checked)
+                    onSubItemChecked(subItem, checked)
                 }
                 vh.optionsBtn.visibility = if (isEditMode) View.VISIBLE else View.GONE
                 vh.optionsBtn.setOnClickListener { onSubItemOptions(item.subTask, subItem) }
