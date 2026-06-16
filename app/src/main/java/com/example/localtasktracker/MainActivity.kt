@@ -95,7 +95,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadData() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val json  = prefs.getString(KEY_DATA, null) ?: return
+        val json  = prefs.getString(KEY_DATA, null) ?: run { seedTestData(); return }
         try {
             tasks.clear()
             var maxTaskId    = 0
@@ -152,6 +152,41 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             tasks.clear()
         }
+    }
+
+    // ─── Seed data (first launch only) ───────────────────────────────────────
+
+    /**
+     * Populates a "Test Checklist" with 10 categories × 10 items × 3 subitems.
+     * Only called on a fresh install (no saved data). Saves immediately so the
+     * data persists across app restarts.
+     */
+    private fun seedTestData() {
+        val task = Task(id = nextTaskId++, title = "Test Checklist")
+
+        for (catIndex in 1..10) {
+            val cat = TaskCategory(
+                id           = nextCategoryId++,
+                categoryName = "Category $catIndex"
+            )
+            for (itemIndex in 1..10) {
+                val sub = SubTask(
+                    id          = nextSubTaskId++,
+                    subTaskName = "Cat$catIndex Item $itemIndex"
+                )
+                for (subItemIndex in 1..3) {
+                    sub.addSubItem(SubItem(
+                        id          = nextSubItemId++,
+                        subItemName = "Cat$catIndex Item$itemIndex Subitem $subItemIndex"
+                    ))
+                }
+                cat.addSubTask(sub)
+            }
+            task.addCategory(cat)
+        }
+
+        tasks.add(task)
+        saveData()
     }
 
     // ─── Screen 1: Task List ──────────────────────────────────────────────────
