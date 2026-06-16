@@ -499,16 +499,57 @@ class DetailAdapter(
                 refresh()
             }
             else -> {
-                // Subtask drag — rebuild each category's subTask list
-                for (cat in task.categories) cat.subTasks.clear()
+                // Subtask drag — rebuild only the categories that are visible (expanded)
+                // in the flat list. Closed categories are absent from `items` entirely,
+                // so we must NOT clear them; otherwise their subtasks would be lost.
+
+                // Step 1: Snapshot the current subTask lists for ALL categories so we
+                //         can restore any category that the flat list doesn't cover.
+                val snapshot = task.categories.associate { cat ->
+                    cat.id to cat.subTasks.toMutableList()
+                }
+
+                // Step 2: Collect the set of category IDs that are actually represented
+                //         in the flat list (i.e. currently expanded/visible).
+                val visibleCatIds = items
+                    .filterIsInstance<DetailItem.CategoryItem>()
+                    .map { it.category.id }
+                    .toSet()
+
+                // Step 3: Clear only the visible categories — we are about to refill
+                //         them from the (possibly reordered) flat list.
+                for (cat in task.categories) {
+                    if (cat.id in visibleCatIds) cat.subTasks.clear()
+                }
+
+                // Step 4: Walk the flat list and assign subtasks to their new category.
+                //         Subtasks that land under a closed category header are correctly
+                //         captured here because canDrop() allows dropping onto a
+                //         TYPE_CATEGORY row, making it appear in `items`.
                 var currentCat: TaskCategory? = null
                 for (flatItem in items) {
                     when (flatItem) {
                         is DetailItem.CategoryItem -> currentCat = flatItem.category
                         is DetailItem.SubTaskItem  -> currentCat?.subTasks?.add(flatItem.subTask)
-                        else -> { /* skip */ }
+                        else -> { /* skip non-subtask rows */ }
                     }
                 }
+
+                // Step 5: Restore closed categories that were never cleared.
+                //         For safety, any visible category that somehow still ended up
+                //         empty while it had items before is also restored (shouldn't
+                //         happen, but guards against edge cases).
+                for (cat in task.categories) {
+                    if (cat.id !in visibleCatIds) {
+                        // Closed category — flat list never touched it; restore snapshot.
+                        val saved = snapshot[cat.id]
+                        if (saved != null) {
+                            cat.subTasks.clear()
+                            cat.subTasks.addAll(saved)
+                        }
+                    }
+                }
+
                 refresh()
             }
         }
