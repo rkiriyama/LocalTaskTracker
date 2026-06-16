@@ -499,52 +499,96 @@ class DetailAdapter(
                 refresh()
             }
             else -> {
-                // Subtask drag — rebuild only the categories that are visible (expanded)
-                // in the flat list. Closed categories are absent from `items` entirely,
-                // so we must NOT clear them; otherwise their subtasks would be lost.
+                // Subtask drag — rebuild category subTask lists carefully.
+                //
+                // The flat `items` list contains CategoryItem headers for ALL categories
+                // (open and closed alike), but SubTaskItem rows only appear under
+                // EXPANDED categories. Closed categories have no SubTaskItem children
+                // in `items` at all.
+                //
+                // Strategy: work entirely from snapshots + expandedCategoryIds,
+                // then apply the single structural change the drag caused.
+                //
+                // 1. Snapshot every category's subTask list.
+                // 2. For each EXPANDED category, rebuild its subTask list from `items`
+                //    (these are the only categories whose subtask ordering may differ
+                //    from the snapshot, and whose SubTaskItem rows are present).
+                // 3. For each CLOSED category, restore from snapshot — their subtasks
+                //    were never in `items` and must never be touched.
+                //
+                // This correctly handles all three scenarios:
+                //   A) Reorder within the same expanded category → rebuilt from items.
+                //   B) Move from one expanded category to another expanded category
+                //      → both rebuilt from items; moved subtask appears under new one.
+                //   C) Move into a closed category (drop onto its header row):
+                //      The dropped SubTaskItem now sits after the closed header in
+                //      `items`. The closed category is NOT in expandedCategoryIds, so
+                //      it would normally be restored from snapshot (missing the drop).
+                //      We handle this by detecting any SubTaskItem that appears directly
+                //      under a closed category header in the flat list, and manually
+                //      appending it to that category's restored snapshot list.
 
-                // Step 1: Snapshot the current subTask lists for ALL categories so we
-                //         can restore any category that the flat list doesn't cover.
-                val snapshot = task.categories.associate { cat ->
+                // Step 1: Snapshot.
+                val snapshot: Map<Int, MutableList<SubTask>> = task.categories.associate { cat ->
                     cat.id to cat.subTasks.toMutableList()
                 }
 
-                // Step 2: Collect the set of category IDs that are actually represented
-                //         in the flat list (i.e. currently expanded/visible).
-                val visibleCatIds = items
-                    .filterIsInstance<DetailItem.CategoryItem>()
-                    .map { it.category.id }
-                    .toSet()
-
-                // Step 3: Clear only the visible categories — we are about to refill
-                //         them from the (possibly reordered) flat list.
+                // Step 2: Rebuild expanded categories from the flat list.
+                // First clear only expanded categories.
                 for (cat in task.categories) {
-                    if (cat.id in visibleCatIds) cat.subTasks.clear()
+                    if (cat.id in expandedCategoryIds) cat.subTasks.clear()
                 }
-
-                // Step 4: Walk the flat list and assign subtasks to their new category.
-                //         Subtasks that land under a closed category header are correctly
-                //         captured here because canDrop() allows dropping onto a
-                //         TYPE_CATEGORY row, making it appear in `items`.
+                // Then walk `items` and fill expanded categories.
                 var currentCat: TaskCategory? = null
+                var currentCatIsExpanded: Boolean = false
                 for (flatItem in items) {
                     when (flatItem) {
-                        is DetailItem.CategoryItem -> currentCat = flatItem.category
-                        is DetailItem.SubTaskItem  -> currentCat?.subTasks?.add(flatItem.subTask)
-                        else -> { /* skip non-subtask rows */ }
+                        is DetailItem.CategoryItem -> {
+                            currentCat = flatItem.category
+                            currentCatIsExpanded = currentCat.id in expandedCategoryIds
+                        }
+                        is DetailItem.SubTaskItem -> {
+                            if (currentCatIsExpanded) {
+                                // Normal case: subtask under an expanded category.
+                                currentCat?.subTasks?.add(flatItem.subTask)
+                            } else {
+                                // Subtask was dropped onto a closed category header.
+                                // currentCat is closed — restore its snapshot first
+                                // (if not already done) then append the moved subtask.
+                                currentCat?.let { closedCat ->
+                                    val saved = snapshot[closedCat.id]
+                                    if (saved != null && !closedCat.subTasks.containsAll(saved)) {
+                                        closedCat.subTasks.clear()
+                                        closedCat.subTasks.addAll(saved)
+                                    }
+                                    // Add the dropped subtask if not already present
+                                    // (avoid duplicates if somehow called twice).
+                                    if (flatItem.subTask !in closedCat.subTasks) {
+                                        closedCat.subTasks.add(flatItem.subTask)
+                                    }
+                                    // Also remove it from its original source category
+                                    // snapshot (it has been moved here now).
+                                    snapshot[flatItem.category.id]?.remove(flatItem.subTask)
+                                }
+                            }
+                        }
+                        else -> { /* skip */ }
                     }
                 }
 
-                // Step 5: Restore closed categories that were never cleared.
-                //         For safety, any visible category that somehow still ended up
-                //         empty while it had items before is also restored (shouldn't
-                //         happen, but guards against edge cases).
+                // Step 3: Restore all closed categories that were NOT the drop target
+                // (i.e. their subTasks list was never touched above).
                 for (cat in task.categories) {
-                    if (cat.id !in visibleCatIds) {
-                        // Closed category — flat list never touched it; restore snapshot.
-                        val saved = snapshot[cat.id]
-                        if (saved != null) {
-                            cat.subTasks.clear()
+                    if (cat.id !in expandedCategoryIds) {
+                        // Only restore if we didn't already handle it as a drop target
+                        // above. A drop-target closed category already has the right
+                        // contents set in Step 2. We detect "already handled" by checking
+                        // whether subTasks is still at its original size vs the snapshot.
+                        val saved = snapshot[cat.id] ?: continue
+                        // If cat.subTasks is empty AND snapshot was non-empty, it means
+                        // we never touched it → restore. If it already has contents
+                        // (set by the drop-target handling above), leave it alone.
+                        if (cat.subTasks.isEmpty() && saved.isNotEmpty()) {
                             cat.subTasks.addAll(saved)
                         }
                     }
