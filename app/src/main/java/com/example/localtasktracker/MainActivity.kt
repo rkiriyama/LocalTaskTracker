@@ -166,6 +166,12 @@ class MainActivity : AppCompatActivity() {
         }
         val recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
+
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
         }
         mainLayout.addView(titleText)
         mainLayout.addView(recyclerView)
@@ -227,6 +233,12 @@ class MainActivity : AppCompatActivity() {
 
         val recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
+
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
         }
         mainLayout.addView(headerRow)
         mainLayout.addView(recyclerView)
