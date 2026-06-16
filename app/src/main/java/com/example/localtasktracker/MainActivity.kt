@@ -160,52 +160,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ─── Seed data ────────────────────────────────────────────────────────────
-
-    /**
-     * Populates a "Test Checklist" with 10 categories × 10 items × 3 subitems.
-     * Called on every launch for testing purposes.
-     * To restore persistence, swap loadData() to call loadDataFromPrefs() instead.
-     */
-    private fun seedTestData() {
-        val task = Task(id = nextTaskId++, title = "Test Checklist")
-
-        for (catIndex in 1..10) {
-            val cat = TaskCategory(
-                id           = nextCategoryId++,
-                categoryName = "Category $catIndex"
-            )
-            for (itemIndex in 1..10) {
-                val sub = SubTask(
-                    id          = nextSubTaskId++,
-                    subTaskName = "Cat$catIndex Item $itemIndex"
-                )
-                for (subItemIndex in 1..3) {
-                    sub.addSubItem(SubItem(
-                        id          = nextSubItemId++,
-                        subItemName = "Cat$catIndex Item$itemIndex Subitem $subItemIndex"
-                    ))
-                }
-                cat.addSubTask(sub)
-            }
-            task.addCategory(cat)
-        }
-
-        tasks.add(task)
-    }
-
     // ─── Screen 1: Task List ──────────────────────────────────────────────────
 
     private fun renderTaskListScreen() {
         mainLayout.removeAllViews()
 
         val titleText = android.widget.TextView(this).apply {
-            text = "Local Checklist Checker"
+            text = "Checklist"
             textSize = 28f
             gravity = Gravity.CENTER
         }
         val recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
+
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
         }
         mainLayout.addView(titleText)
         mainLayout.addView(recyclerView)
@@ -267,6 +239,12 @@ class MainActivity : AppCompatActivity() {
 
         val recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
+
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
         }
         mainLayout.addView(headerRow)
         mainLayout.addView(recyclerView)
