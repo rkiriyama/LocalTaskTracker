@@ -94,8 +94,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadData() {
+        tasks.clear()
+        seedTestData()
+    }
+
+    @Suppress("unused")
+    private fun loadDataFromPrefs() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val json  = prefs.getString(KEY_DATA, null) ?: run { seedTestData(); return }
+        val json  = prefs.getString(KEY_DATA, null) ?: return
         try {
             tasks.clear()
             var maxTaskId    = 0
@@ -154,12 +160,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ─── Seed data (first launch only) ───────────────────────────────────────
+    // ─── Seed data ────────────────────────────────────────────────────────────
 
     /**
      * Populates a "Test Checklist" with 10 categories × 10 items × 3 subitems.
-     * Only called on a fresh install (no saved data). Saves immediately so the
-     * data persists across app restarts.
+     * Called on every launch for testing purposes.
+     * To restore persistence, swap loadData() to call loadDataFromPrefs() instead.
      */
     private fun seedTestData() {
         val task = Task(id = nextTaskId++, title = "Test Checklist")
@@ -186,7 +192,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         tasks.add(task)
-        saveData()
     }
 
     // ─── Screen 1: Task List ──────────────────────────────────────────────────
