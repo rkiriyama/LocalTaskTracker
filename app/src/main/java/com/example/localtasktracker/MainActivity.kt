@@ -21,6 +21,10 @@ class MainActivity : AppCompatActivity() {
     private val expandedCategoryIds = mutableSetOf<Int>()
     private val expandedSubTaskIds  = mutableSetOf<Int>()
 
+    // Per-task persisted expand/collapse state (keyed by task ID)
+    private val savedExpandedCategoryIds = mutableMapOf<Int, MutableSet<Int>>()
+    private val savedExpandedSubTaskIds  = mutableMapOf<Int, MutableSet<Int>>()
+
     private var nextTaskId     = 1
     private var nextCategoryId = 1
     private var nextSubTaskId  = 1
@@ -55,6 +59,15 @@ class MainActivity : AppCompatActivity() {
             val tObj = JSONObject()
             tObj.put("id",    task.id)
             tObj.put("title", task.title)
+
+            // Persist expand/collapse state for this task
+            val expCatArr = JSONArray()
+            savedExpandedCategoryIds[task.id]?.forEach { expCatArr.put(it) }
+            tObj.put("expandedCategoryIds", expCatArr)
+
+            val expSubArr = JSONArray()
+            savedExpandedSubTaskIds[task.id]?.forEach { expSubArr.put(it) }
+            tObj.put("expandedSubTaskIds", expSubArr)
 
             val cats = JSONArray()
             for (cat in task.categories) {
@@ -98,6 +111,8 @@ class MainActivity : AppCompatActivity() {
         val json  = prefs.getString(KEY_DATA, null) ?: return
         try {
             tasks.clear()
+            savedExpandedCategoryIds.clear()
+            savedExpandedSubTaskIds.clear()
             var maxTaskId    = 0
             var maxCatId     = 0
             var maxSubId     = 0
@@ -108,6 +123,20 @@ class MainActivity : AppCompatActivity() {
                 val tObj = root.getJSONObject(ti)
                 val task = Task(tObj.optInt("id", nextTaskId++), tObj.optString("title", "Untitled"))
                 if (task.id > maxTaskId) maxTaskId = task.id
+
+                // Restore per-task expand/collapse state
+                val expCatArr = tObj.optJSONArray("expandedCategoryIds")
+                if (expCatArr != null) {
+                    val catSet = mutableSetOf<Int>()
+                    for (i in 0 until expCatArr.length()) catSet.add(expCatArr.getInt(i))
+                    savedExpandedCategoryIds[task.id] = catSet
+                }
+                val expSubArr = tObj.optJSONArray("expandedSubTaskIds")
+                if (expSubArr != null) {
+                    val subSet = mutableSetOf<Int>()
+                    for (i in 0 until expSubArr.length()) subSet.add(expSubArr.getInt(i))
+                    savedExpandedSubTaskIds[task.id] = subSet
+                }
 
                 val cats = tObj.optJSONArray("categories") ?: JSONArray()
                 for (ci in 0 until cats.length()) {
@@ -151,6 +180,8 @@ class MainActivity : AppCompatActivity() {
 
         } catch (e: Exception) {
             tasks.clear()
+            savedExpandedCategoryIds.clear()
+            savedExpandedSubTaskIds.clear()
         }
     }
 
@@ -190,15 +221,25 @@ class MainActivity : AppCompatActivity() {
     // ─── Screen 2: Task Detail ────────────────────────────────────────────────
 
     private fun renderTaskDetailScreen(task: Task, startInEditMode: Boolean = false) {
-        // Expand all categories
+        // Restore saved expand/collapse state, or default to all-expanded for new tasks
         expandedCategoryIds.clear()
-        task.categories.forEach { expandedCategoryIds.add(it.id) }
-
-        // Expand all subtasks that have subitems
         expandedSubTaskIds.clear()
-        task.categories.forEach { cat ->
-            cat.subTasks.forEach { sub ->
-                if (sub.hasSubItems()) expandedSubTaskIds.add(sub.id)
+        val savedCatIds = savedExpandedCategoryIds[task.id]
+        val savedSubIds = savedExpandedSubTaskIds[task.id]
+        if (savedCatIds != null) {
+            expandedCategoryIds.addAll(savedCatIds)
+        } else {
+            // No saved state: default to all expanded
+            task.categories.forEach { expandedCategoryIds.add(it.id) }
+        }
+        if (savedSubIds != null) {
+            expandedSubTaskIds.addAll(savedSubIds)
+        } else {
+            // No saved state: expand all subtasks that have subitems
+            task.categories.forEach { cat ->
+                cat.subTasks.forEach { sub ->
+                    if (sub.hasSubItems()) expandedSubTaskIds.add(sub.id)
+                }
             }
         }
 
@@ -250,12 +291,14 @@ class MainActivity : AppCompatActivity() {
             onCategoryToggle    = { cat ->
                 if (cat.id in expandedCategoryIds) expandedCategoryIds.remove(cat.id)
                 else expandedCategoryIds.add(cat.id)
+                saveExpandState(task)
                 refreshDetail(recyclerView)
             },
             onCategoryOptions   = { cat -> showCategoryOptionsDialog(task, cat, recyclerView) },
             onSubTaskToggle     = { sub ->
                 if (sub.id in expandedSubTaskIds) expandedSubTaskIds.remove(sub.id)
                 else expandedSubTaskIds.add(sub.id)
+                saveExpandState(task)
                 refreshDetail(recyclerView)
             },
             onSubTaskChecked    = { subTask, checked ->
@@ -285,7 +328,7 @@ class MainActivity : AppCompatActivity() {
             if (adapter.isEditMode) {
                 AlertDialog.Builder(this)
                     .setTitle(task.title)
-                    .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Duplicate", "Delete")) { _, which ->
+                    .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Expand All", "Collapse All", "Duplicate", "Delete")) { _, which ->
                         when (which) {
                             0 -> showRenameTaskDialog(task, recyclerView, titleText)
                             1 -> {
@@ -306,8 +349,24 @@ class MainActivity : AppCompatActivity() {
                                 }
                                 saveData(); adapter.refresh()
                             }
-                            3 -> showDuplicateTaskDialog(task)
-                            4 -> AlertDialog.Builder(this)
+                            3 -> {
+                                expandedCategoryIds.clear()
+                                expandedSubTaskIds.clear()
+                                task.categories.forEach { cat ->
+                                    expandedCategoryIds.add(cat.id)
+                                    cat.subTasks.forEach { sub ->
+                                        if (sub.hasSubItems()) expandedSubTaskIds.add(sub.id)
+                                    }
+                                }
+                                saveExpandState(task); adapter.refresh()
+                            }
+                            4 -> {
+                                expandedCategoryIds.clear()
+                                expandedSubTaskIds.clear()
+                                saveExpandState(task); adapter.refresh()
+                            }
+                            5 -> showDuplicateTaskDialog(task)
+                            6 -> AlertDialog.Builder(this)
                                     .setTitle("Delete \"${task.title}\"?")
                                     .setMessage("This will permanently delete the checklist and all its contents.")
                                     .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
@@ -318,7 +377,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 AlertDialog.Builder(this)
                     .setTitle(task.title)
-                    .setItems(arrayOf("Edit", "Check All", "Uncheck All")) { _, which ->
+                    .setItems(arrayOf("Edit", "Check All", "Uncheck All", "Expand All", "Collapse All")) { _, which ->
                         when (which) {
                             0 -> {
                                 adapter.setEditMode(true)
@@ -342,6 +401,22 @@ class MainActivity : AppCompatActivity() {
                                 }
                                 saveData(); adapter.refresh()
                             }
+                            3 -> {
+                                expandedCategoryIds.clear()
+                                expandedSubTaskIds.clear()
+                                task.categories.forEach { cat ->
+                                    expandedCategoryIds.add(cat.id)
+                                    cat.subTasks.forEach { sub ->
+                                        if (sub.hasSubItems()) expandedSubTaskIds.add(sub.id)
+                                    }
+                                }
+                                saveExpandState(task); adapter.refresh()
+                            }
+                            4 -> {
+                                expandedCategoryIds.clear()
+                                expandedSubTaskIds.clear()
+                                saveExpandState(task); adapter.refresh()
+                            }
                         }
                     }
                     .setNegativeButton("Cancel", null).show()
@@ -356,6 +431,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshDetail(recyclerView: RecyclerView) {
         (recyclerView.adapter as? DetailAdapter)?.refresh()
+    }
+
+    /**
+     * Snapshots the current in-memory expand/collapse sets into the per-task
+     * saved maps and immediately persists them to SharedPreferences.
+     */
+    private fun saveExpandState(task: Task) {
+        savedExpandedCategoryIds[task.id] = expandedCategoryIds.toMutableSet()
+        savedExpandedSubTaskIds[task.id]  = expandedSubTaskIds.toMutableSet()
+        saveData()
     }
 
     private fun focusInput(dialog: AlertDialog, input: EditText, selectAll: Boolean = false) {
@@ -560,7 +645,7 @@ class MainActivity : AppCompatActivity() {
     private fun showTaskOptionsDialog(task: Task) {
         AlertDialog.Builder(this)
             .setTitle(task.title)
-            .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Duplicate", "Delete")) { _, which ->
+            .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Expand All", "Collapse All", "Duplicate", "Delete")) { _, which ->
                 when (which) {
                     0 -> showRenameTaskDialog(task)
                     1 -> {
@@ -581,8 +666,30 @@ class MainActivity : AppCompatActivity() {
                         }
                         saveData(); renderTaskListScreen()
                     }
-                    3 -> showDuplicateTaskDialog(task)
-                    4 -> AlertDialog.Builder(this)
+                    3 -> {
+                        // Expand All: open the task with all categories and subtask groups expanded
+                        val catIds = mutableSetOf<Int>()
+                        val subIds = mutableSetOf<Int>()
+                        task.categories.forEach { cat ->
+                            catIds.add(cat.id)
+                            cat.subTasks.forEach { sub ->
+                                if (sub.hasSubItems()) subIds.add(sub.id)
+                            }
+                        }
+                        savedExpandedCategoryIds[task.id] = catIds
+                        savedExpandedSubTaskIds[task.id]  = subIds
+                        saveData()
+                        renderTaskDetailScreen(task)
+                    }
+                    4 -> {
+                        // Collapse All: open the task with all categories and subtask groups collapsed
+                        savedExpandedCategoryIds[task.id] = mutableSetOf()
+                        savedExpandedSubTaskIds[task.id]  = mutableSetOf()
+                        saveData()
+                        renderTaskDetailScreen(task)
+                    }
+                    5 -> showDuplicateTaskDialog(task)
+                    6 -> AlertDialog.Builder(this)
                             .setTitle("Delete \"${task.title}\"?")
                             .setMessage("This will permanently delete the checklist and all its contents.")
                             .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
