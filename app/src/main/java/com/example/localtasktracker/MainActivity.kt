@@ -40,7 +40,7 @@ class MainActivity : AppCompatActivity() {
         supportActionBar?.hide()
         mainLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(40, 120, 40, 40)
+            setPadding(40, 120, 40, 110)
         }
         setContentView(mainLayout)
         loadData()
