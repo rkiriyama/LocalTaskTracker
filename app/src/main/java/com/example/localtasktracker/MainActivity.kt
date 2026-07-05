@@ -1,12 +1,15 @@
 package com.example.localtasktracker
 
 import android.content.Context
+import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -24,6 +27,29 @@ class MainActivity : AppCompatActivity() {
     // Per-task persisted expand/collapse state (keyed by task ID)
     private val savedExpandedCategoryIds = mutableMapOf<Int, MutableSet<Int>>()
     private val savedExpandedSubTaskIds  = mutableMapOf<Int, MutableSet<Int>>()
+
+    // Holds the task to be backed up while waiting for the SAF file-picker result
+    private var pendingBackupTask: Task? = null
+
+    // SAF launcher: save one task to a user-chosen file
+    private val backupSingleTaskLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            val task = pendingBackupTask ?: return@registerForActivityResult
+            pendingBackupTask = null
+            if (uri != null) writeBackupToUri(uri, serializeTasksToJson(listOf(task)))
+        }
+
+    // SAF launcher: save all tasks to a user-chosen file
+    private val backupAllTasksLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri != null) writeBackupToUri(uri, serializeTasksToJson(tasks))
+        }
+
+    // SAF launcher: open a backup file and show the load-checklist picker
+    private val loadChecklistLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) loadChecklistFromUri(uri)
+        }
 
     private var nextTaskId     = 1
     private var nextCategoryId = 1
@@ -190,22 +216,59 @@ class MainActivity : AppCompatActivity() {
     private fun renderTaskListScreen() {
         mainLayout.removeAllViews()
 
+        // ── Header row: [Checklist title] [⋮] ────────────────────────────────
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         val titleText = android.widget.TextView(this).apply {
             text = "Checklist"
             textSize = 28f
-            gravity = Gravity.CENTER
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
+        val globalOptionsBtn = Button(this).apply {
+            text = "⋮"
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Options")
+                    .setItems(arrayOf("Backup All Checklists")) { _, which ->
+                        when (which) {
+                            0 -> backupAllTasksLauncher.launch("localtasktracker_backup_all.json")
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+        headerRow.addView(titleText)
+        headerRow.addView(globalOptionsBtn)
+
         val recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
-
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1f
             )
         }
-        mainLayout.addView(titleText)
+
+        // ── Bottom row: [Load Checklist] [Add Checklist (in adapter footer)] ─
+        // Load Checklist lives here; Add Checklist is rendered by TaskAdapter's footer row
+        val loadBtn = Button(this).apply {
+            text = "Load Checklist"
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener {
+                loadChecklistLauncher.launch(arrayOf("application/json", "*/*"))
+            }
+        }
+
+        mainLayout.addView(headerRow)
         mainLayout.addView(recyclerView)
+        mainLayout.addView(loadBtn)
 
         val adapter = TaskAdapter(
             tasks          = tasks,
@@ -328,7 +391,7 @@ class MainActivity : AppCompatActivity() {
             if (adapter.isEditMode) {
                 AlertDialog.Builder(this)
                     .setTitle(task.title)
-                    .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Expand All", "Collapse All", "Duplicate", "Delete")) { _, which ->
+                    .setItems(arrayOf("Rename", "Check All", "Uncheck All", "Expand All", "Collapse All", "Backup", "Duplicate", "Delete")) { _, which ->
                         when (which) {
                             0 -> showRenameTaskDialog(task, recyclerView, titleText)
                             1 -> {
@@ -365,8 +428,17 @@ class MainActivity : AppCompatActivity() {
                                 expandedSubTaskIds.clear()
                                 saveExpandState(task); adapter.refresh()
                             }
-                            5 -> showDuplicateTaskDialog(task)
-                            6 -> AlertDialog.Builder(this)
+                            5 -> {
+                                pendingBackupTask = task
+                                val safeName = task.title
+                                    .replace(Regex("[^a-zA-Z0-9_\\- ]"), "")
+                                    .trim()
+                                    .replace(" ", "_")
+                                    .ifEmpty { "backup" }
+                                backupSingleTaskLauncher.launch("${safeName}_backup.json")
+                            }
+                            6 -> showDuplicateTaskDialog(task)
+                            7 -> AlertDialog.Builder(this)
                                     .setTitle("Delete \"${task.title}\"?")
                                     .setMessage("This will permanently delete the checklist and all its contents.")
                                     .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
@@ -377,7 +449,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 AlertDialog.Builder(this)
                     .setTitle(task.title)
-                    .setItems(arrayOf("Edit", "Check All", "Uncheck All", "Expand All", "Collapse All")) { _, which ->
+                    .setItems(arrayOf("Edit", "Check All", "Uncheck All", "Expand All", "Collapse All", "Backup")) { _, which ->
                         when (which) {
                             0 -> {
                                 adapter.setEditMode(true)
@@ -417,6 +489,15 @@ class MainActivity : AppCompatActivity() {
                                 expandedSubTaskIds.clear()
                                 saveExpandState(task); adapter.refresh()
                             }
+                            5 -> {
+                                pendingBackupTask = task
+                                val safeName = task.title
+                                    .replace(Regex("[^a-zA-Z0-9_\\- ]"), "")
+                                    .trim()
+                                    .replace(" ", "_")
+                                    .ifEmpty { "backup" }
+                                backupSingleTaskLauncher.launch("${safeName}_backup.json")
+                            }
                         }
                     }
                     .setNegativeButton("Cancel", null).show()
@@ -443,10 +524,181 @@ class MainActivity : AppCompatActivity() {
         saveData()
     }
 
+    // ─── Load helpers ─────────────────────────────────────────────────────────
+
+    /**
+     * Reads a backup JSON file from the SAF URI, parses it, and shows the
+     * task-picker dialog. Never modifies the backup file.
+     */
+    private fun loadChecklistFromUri(uri: Uri) {
+        val json = try {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                stream.bufferedReader(Charsets.UTF_8).readText()
+            } ?: run {
+                Toast.makeText(this, "Could not read file", Toast.LENGTH_LONG).show()
+                return
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Failed to open file: ${e.message}", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val root = try {
+            JSONArray(json)
+        } catch (e: Exception) {
+            AlertDialog.Builder(this)
+                .setTitle("Invalid Backup File")
+                .setMessage("The selected file is not a valid backup.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
+        if (root.length() == 0) {
+            AlertDialog.Builder(this)
+                .setTitle("Empty Backup")
+                .setMessage("No checklists found in this backup file.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
+        showLoadChecklistDialog(root)
+    }
+
+    /**
+     * Shows a dialog listing the task names from the parsed backup JSON array.
+     * Selecting one copies it into the live task list with fresh IDs.
+     * The backup data is never modified.
+     */
+    private fun showLoadChecklistDialog(root: JSONArray) {
+        val titles = Array(root.length()) { i ->
+            root.getJSONObject(i).optString("title", "Untitled")
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Load Checklist")
+            .setItems(titles) { _, which ->
+                val tObj = root.getJSONObject(which)
+                importTaskFromJson(tObj)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /**
+     * Copies a single task from a backup JSON object into the live task list,
+     * assigning fresh IDs to every element. Completion states are preserved.
+     * The source JSON object is never modified.
+     */
+    private fun importTaskFromJson(tObj: JSONObject) {
+        val newTask = Task(nextTaskId++, tObj.optString("title", "Untitled"))
+
+        val cats = tObj.optJSONArray("categories") ?: JSONArray()
+        for (ci in 0 until cats.length()) {
+            val cObj = cats.getJSONObject(ci)
+            val newCat = TaskCategory(nextCategoryId++, cObj.optString("name", "Unnamed"))
+
+            val subs = cObj.optJSONArray("subTasks") ?: JSONArray()
+            for (si in 0 until subs.length()) {
+                val sObj = subs.getJSONObject(si)
+                val newSub = SubTask(
+                    nextSubTaskId++,
+                    sObj.optString("name", "Unnamed"),
+                    sObj.optBoolean("completed", false)
+                )
+
+                val subItemsArr = sObj.optJSONArray("subItems") ?: JSONArray()
+                for (sii in 0 until subItemsArr.length()) {
+                    val siObj = subItemsArr.getJSONObject(sii)
+                    newSub.addSubItem(SubItem(
+                        nextSubItemId++,
+                        siObj.optString("name", "Unnamed"),
+                        siObj.optBoolean("completed", false)
+                    ))
+                }
+                newCat.addSubTask(newSub)
+            }
+            newTask.addCategory(newCat)
+        }
+
+        tasks.add(newTask)
+        saveData()
+        renderTaskListScreen()
+        Toast.makeText(this, "\"${newTask.title}\" loaded successfully", Toast.LENGTH_SHORT).show()
+    }
+
     private fun focusInput(dialog: AlertDialog, input: EditText, selectAll: Boolean = false) {
         input.requestFocus()
         if (selectAll) input.selectAll()
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+    }
+
+    // ─── Backup helpers ───────────────────────────────────────────────────────
+
+    /**
+     * Serializes a list of tasks into a JSON array string using the same
+     * format as saveData(). Read-only — never touches live data.
+     */
+    private fun serializeTasksToJson(taskList: List<Task>): String {
+        val root = JSONArray()
+        for (task in taskList) {
+            val tObj = JSONObject()
+            tObj.put("id",    task.id)
+            tObj.put("title", task.title)
+
+            val expCatArr = JSONArray()
+            savedExpandedCategoryIds[task.id]?.forEach { expCatArr.put(it) }
+            tObj.put("expandedCategoryIds", expCatArr)
+
+            val expSubArr = JSONArray()
+            savedExpandedSubTaskIds[task.id]?.forEach { expSubArr.put(it) }
+            tObj.put("expandedSubTaskIds", expSubArr)
+
+            val cats = JSONArray()
+            for (cat in task.categories) {
+                val cObj = JSONObject()
+                cObj.put("id",   cat.id)
+                cObj.put("name", cat.categoryName)
+                val subs = JSONArray()
+                for (sub in cat.subTasks) {
+                    val sObj = JSONObject()
+                    sObj.put("id",        sub.id)
+                    sObj.put("name",      sub.subTaskName)
+                    sObj.put("completed", sub.isCompleted)
+                    val subItemsArr = JSONArray()
+                    for (si in sub.subItems) {
+                        val siObj = JSONObject()
+                        siObj.put("id",        si.id)
+                        siObj.put("name",      si.subItemName)
+                        siObj.put("completed", si.isCompleted)
+                        subItemsArr.put(siObj)
+                    }
+                    sObj.put("subItems", subItemsArr)
+                    subs.put(sObj)
+                }
+                cObj.put("subTasks", subs)
+                cats.put(cObj)
+            }
+            tObj.put("categories", cats)
+            root.put(tObj)
+        }
+        return root.toString(2) // pretty-print with 2-space indent
+    }
+
+    /**
+     * Writes a JSON string to the URI returned by the SAF file picker.
+     * Shows a Toast on success or failure. Never modifies live data.
+     */
+    private fun writeBackupToUri(uri: Uri, json: String) {
+        try {
+            contentResolver.openOutputStream(uri)?.use { stream ->
+                stream.write(json.toByteArray(Charsets.UTF_8))
+            }
+            Toast.makeText(this, "Backup saved successfully", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Backup failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     // ─── Add dialogs ──────────────────────────────────────────────────────────
