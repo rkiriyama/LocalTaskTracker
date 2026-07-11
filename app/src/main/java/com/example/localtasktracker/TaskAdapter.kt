@@ -4,9 +4,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
-import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
-import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
@@ -107,8 +105,9 @@ class TaskAdapter(
                 holder.nameText.text = task.title
                 holder.row.setOnClickListener { onTaskClick(task) }
                 holder.optionsBtn.setOnClickListener { onOptionsClick(task) }
-                val progress = if (task.categories.isEmpty()) 0
-                    else task.categories.map { it.computeProgress() }.average().toInt()
+                // Progress = average of all top-level category node progress values.
+                val progress = if (task.children.isEmpty()) 0
+                    else task.children.map { it.computeProgress() }.average().toInt()
                 applyBadge(holder.ringView, holder.pctText, progress)
             }
             is AddViewHolder -> holder.addBtn.setOnClickListener { onAddClick() }
@@ -153,7 +152,7 @@ class TaskAdapter(
 
     // ─── DragHost ─────────────────────────────────────────────────────────────
 
-    override fun onDragStarting(position: Int) { /* tasks are always single-row — nothing to collapse */ }
+    override fun onDragStarting(position: Int) { /* tasks are always single-row */ }
     override fun canDrag(position: Int): Boolean = getItemViewType(position) == TYPE_TASK
     override fun canDrop(position: Int): Boolean = getItemViewType(position) == TYPE_TASK
 
@@ -179,17 +178,17 @@ fun badgeColor(percent: Int): Int = when {
 
 // ─── Custom view: circular progress ring ─────────────────────────────────────
 
-class RingView(ctx: android.content.Context) : View(ctx) {
+class RingView(ctx: android.content.Context) : android.view.View(ctx) {
 
     private var sweepAngle = 0f
     private var arcColor   = Color.parseColor("#F44336")
 
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style  = Paint.Style.STROKE
-        color  = Color.parseColor("#44FFFFFF") // translucent white track
+        style = Paint.Style.STROKE
+        color = Color.parseColor("#44FFFFFF")
     }
     private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style  = Paint.Style.STROKE
+        style = Paint.Style.STROKE
     }
 
     fun setProgress(percent: Int, color: Int) {
@@ -208,18 +207,13 @@ class RingView(ctx: android.content.Context) : View(ctx) {
         val inset = stroke / 2f
         val oval  = RectF(inset, inset, width - inset, height - inset)
 
-        // Background filled circle (dark tint of arc color)
         val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
             color = Color.argb(60,
                 Color.red(arcColor), Color.green(arcColor), Color.blue(arcColor))
         }
         canvas.drawOval(oval, fillPaint)
-
-        // Grey track ring
         canvas.drawArc(oval, -90f, 360f, false, trackPaint)
-
-        // Colored progress arc
         if (sweepAngle > 0f) {
             canvas.drawArc(oval, -90f, sweepAngle, false, arcPaint)
         }

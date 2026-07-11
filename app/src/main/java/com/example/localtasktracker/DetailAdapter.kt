@@ -14,38 +14,36 @@ import androidx.recyclerview.widget.RecyclerView
 /**
  * RecyclerView adapter for Screen 2 — the flat mixed-type detail list.
  *
- * View types:
+ * The data model is now a recursive [Node] tree instead of three separate classes.
+ * View types and visual behaviour are identical to before:
+ *
  *   TYPE_CATEGORY      — category header row (draggable)
- *   TYPE_SUBTASK       — subtask row; acts as mini-category when it has subitems
+ *   TYPE_SUBTASK       — subtask row; shows progress ring when it has children
  *   TYPE_ADD_ITEM      — "+ Add Item" button under a category (Edit mode only)
  *   TYPE_ADD_CATEGORY  — "+ Add Category" button at the bottom (Edit mode only)
  *   TYPE_SUBITEM       — subitem row under a parent subtask (draggable within parent)
  *   TYPE_ADD_SUBITEM   — "+ Add Subitem" button under a parent subtask (Edit mode only)
  *
  * ── Drag design ───────────────────────────────────────────────────────────────
- * Category drag  : onDragStarting collapses all child rows via incremental
- *                  notifyItemRemoved so ItemTouchHelper never sees notifyDataSetChanged.
- *                  Each subsequent onItemMoved is a plain removeAt+add+notifyItemMoved.
+ * Category drag  : collapses all child rows so only TYPE_CATEGORY rows remain.
  * Subtask drag   : single-row moves; can cross category boundaries.
- * Subitem drag   : onDragStarting collapses all OTHER parent subtasks' subitems so
- *                  only the dragged subitem's siblings remain visible. Subitems can
- *                  only land on TYPE_SUBITEM rows (within the same parent block).
+ * Subitem drag   : collapses sibling-parent subitems; drag is within-parent only.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 class DetailAdapter(
     private val task: Task,
     private val expandedCategoryIds: MutableSet<Int>,
     private val expandedSubTaskIds: MutableSet<Int>,
-    private val onCategoryToggle: (TaskCategory) -> Unit,
-    private val onCategoryOptions: (TaskCategory) -> Unit,
-    private val onSubTaskToggle: (SubTask) -> Unit,
-    private val onSubTaskChecked: (SubTask, Boolean) -> Unit,
-    private val onSubTaskOptions: (TaskCategory, SubTask) -> Unit,
-    private val onAddSubItem: (SubTask) -> Unit,
-    private val onSubItemChecked: (SubItem, Boolean) -> Unit,
-    private val onSubItemOptions: (SubTask, SubItem) -> Unit,
+    private val onCategoryToggle: (Node) -> Unit,
+    private val onCategoryOptions: (Node) -> Unit,
+    private val onSubTaskToggle: (Node) -> Unit,
+    private val onSubTaskChecked: (Node, Boolean) -> Unit,
+    private val onSubTaskOptions: (Node /* parent category */, Node /* subtask */) -> Unit,
+    private val onAddSubItem: (Node /* parent subtask */) -> Unit,
+    private val onSubItemChecked: (Node, Boolean) -> Unit,
+    private val onSubItemOptions: (Node /* parent subtask */, Node /* subitem */) -> Unit,
     private val onAddCategory: () -> Unit,
-    private val onAddItem: (TaskCategory) -> Unit,
+    private val onAddItem: (Node /* parent category */) -> Unit,
     private val onDragFinished: () -> Unit
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>(), DragCallback.DragHost {
 
@@ -61,17 +59,17 @@ class DetailAdapter(
     // ─── Flat item model ──────────────────────────────────────────────────────
 
     sealed class DetailItem {
-        data class CategoryItem(val category: TaskCategory) : DetailItem()
-        data class SubTaskItem(val category: TaskCategory, val subTask: SubTask) : DetailItem()
-        data class AddItemButton(val category: TaskCategory) : DetailItem()
+        data class CategoryItem(val category: Node) : DetailItem()
+        data class SubTaskItem(val category: Node, val subTask: Node) : DetailItem()
+        data class AddItemButton(val category: Node) : DetailItem()
         object AddCategoryButton : DetailItem()
-        data class SubItemRow(val subTask: SubTask, val subItem: SubItem) : DetailItem()
-        data class AddSubItemButton(val subTask: SubTask) : DetailItem()
+        data class SubItemRow(val subTask: Node, val subItem: Node) : DetailItem()
+        data class AddSubItemButton(val subTask: Node) : DetailItem()
     }
 
     internal val items = mutableListOf<DetailItem>()
 
-/** True while a category drag gesture is active. */
+    /** True while a category drag gesture is active. */
     private var isDraggingCategory = false
 
     /** True while a subitem drag gesture is active. */
@@ -92,13 +90,13 @@ class DetailAdapter(
 
     fun refresh() {
         items.clear()
-        for (category in task.categories) {
+        for (category in task.children) {
             items.add(DetailItem.CategoryItem(category))
             if (category.id in expandedCategoryIds) {
-                for (subTask in category.subTasks) {
+                for (subTask in category.children) {
                     items.add(DetailItem.SubTaskItem(category, subTask))
-                    if (subTask.hasSubItems() && subTask.id in expandedSubTaskIds) {
-                        for (subItem in subTask.subItems) {
+                    if (subTask.hasChildren() && subTask.id in expandedSubTaskIds) {
+                        for (subItem in subTask.children) {
                             items.add(DetailItem.SubItemRow(subTask, subItem))
                         }
                         if (isEditMode) items.add(DetailItem.AddSubItemButton(subTask))
@@ -113,7 +111,6 @@ class DetailAdapter(
 
     // ─── Collapse helpers for drag ────────────────────────────────────────────
 
-    /** Collapses all category child rows (subtasks, subitems, add-buttons) for category drag. */
     private fun collapseAllForCategoryDrag() {
         for (i in items.indices.reversed()) {
             val item = items[i]
@@ -125,16 +122,11 @@ class DetailAdapter(
         isDraggingCategory = true
     }
 
-    /**
-     * For a subitem drag: collapses subitems belonging to every parent subtask
-     * OTHER than [parentSubTask], so only that parent's subitems are visible.
-     * The dragged subitem's siblings stay in the list — drag is within-parent only.
-     */
-    private fun collapseOtherSubItemsForDrag(parentSubTask: SubTask) {
+    private fun collapseOtherSubItemsForDrag(parentSubTask: Node) {
         for (i in items.indices.reversed()) {
             val item = items[i]
             val belongsToOtherParent = when (item) {
-                is DetailItem.SubItemRow      -> item.subTask.id != parentSubTask.id
+                is DetailItem.SubItemRow       -> item.subTask.id != parentSubTask.id
                 is DetailItem.AddSubItemButton -> item.subTask.id != parentSubTask.id
                 else -> false
             }
@@ -162,7 +154,6 @@ class DetailAdapter(
     // ─── ViewHolders ──────────────────────────────────────────────────────────
 
     inner class CategoryViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
-        // arrow | badgeFrame | nameText | optionsBtn
         val arrow:      TextView    = row.getChildAt(0) as TextView
         val badgeFrame: FrameLayout = row.getChildAt(1) as FrameLayout
         val nameText:   TextView    = row.getChildAt(2) as TextView
@@ -171,12 +162,6 @@ class DetailAdapter(
         val pctText:    TextView    = badgeFrame.getChildAt(1) as TextView
     }
 
-    /**
-     * SubTask row — layout: arrow | badgeFrame | checkBox | nameText | addSubItemBtn | optionsBtn
-     *
-     * When the subtask has subitems:  arrow=▼/▶, badgeFrame=VISIBLE, checkBox=GONE
-     * When plain (no subitems):       arrow=GONE, badgeFrame=GONE,    checkBox=VISIBLE
-     */
     inner class SubTaskViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
         val arrow:         TextView    = row.getChildAt(0) as TextView
         val badgeFrame:    FrameLayout = row.getChildAt(1) as FrameLayout
@@ -196,9 +181,7 @@ class DetailAdapter(
         val addBtn: Button = row.getChildAt(0) as Button
     }
 
-    /** SubItem row — mirrors SubTaskViewHolder but no arrow/addSubItemBtn. */
     inner class SubItemViewHolder(val row: LinearLayout) : RecyclerView.ViewHolder(row) {
-        // checkBox | nameText | optionsBtn
         val checkBox:   CheckBox = row.getChildAt(0) as CheckBox
         val nameText:   TextView = row.getChildAt(1) as TextView
         val optionsBtn: Button   = row.getChildAt(2) as Button
@@ -297,7 +280,6 @@ class DetailAdapter(
                 val row = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    // Indent deeper than subtasks (subtasks are at 60)
                     setPadding(120, 8, 0, 8)
                     layoutParams = matchWrap
                 }
@@ -336,7 +318,7 @@ class DetailAdapter(
                 val cat = item.category
                 val isExpanded = cat.id in expandedCategoryIds
                 vh.arrow.text = if (isExpanded) "▼" else "▶"
-                vh.nameText.text = cat.categoryName
+                vh.nameText.text = cat.name
                 vh.row.setBackgroundColor(Color.TRANSPARENT)
                 val toggle = { _: View -> onCategoryToggle(cat) }
                 vh.arrow.setOnClickListener(toggle)
@@ -349,9 +331,9 @@ class DetailAdapter(
             is DetailItem.SubTaskItem -> {
                 val vh      = holder as SubTaskViewHolder
                 val subTask = item.subTask
-                vh.nameText.text = subTask.subTaskName
+                vh.nameText.text = subTask.name
 
-                if (subTask.hasSubItems()) {
+                if (subTask.hasChildren()) {
                     // ── Parent mode (mini-category) ───────────────────────────
                     val isExpanded = subTask.id in expandedSubTaskIds
                     vh.arrow.text            = if (isExpanded) "▼" else "▶"
@@ -370,8 +352,6 @@ class DetailAdapter(
                     vh.badgeFrame.visibility = View.GONE
                     vh.checkBox.visibility   = View.VISIBLE
                     vh.nameText.setOnClickListener(null)
-                    // Clear before setting isChecked so the recycled ViewHolder's
-                    // old listener cannot fire during rebind.
                     vh.checkBox.setOnCheckedChangeListener(null)
                     vh.checkBox.isChecked = subTask.isCompleted
                     vh.checkBox.setOnCheckedChangeListener { _, checked ->
@@ -388,8 +368,7 @@ class DetailAdapter(
             is DetailItem.SubItemRow -> {
                 val vh      = holder as SubItemViewHolder
                 val subItem = item.subItem
-                vh.nameText.text = subItem.subItemName
-                // Clear before setting isChecked — same recycling safety as above.
+                vh.nameText.text = subItem.name
                 vh.checkBox.setOnCheckedChangeListener(null)
                 vh.checkBox.isChecked = subItem.isCompleted
                 vh.checkBox.setOnCheckedChangeListener { _, checked ->
@@ -435,9 +414,8 @@ class DetailAdapter(
             TYPE_CATEGORY -> reorderHelper.canDragCategory()
             TYPE_SUBTASK  -> true
             TYPE_SUBITEM  -> {
-                // Only draggable when there are 2+ siblings to reorder
                 val subTask = (items[position] as DetailItem.SubItemRow).subTask
-                subTask.subItems.size >= 2
+                subTask.children.size >= 2
             }
             else -> false
         }
@@ -484,62 +462,40 @@ class DetailAdapter(
             }
             isDraggingSubItem -> {
                 isDraggingSubItem = false
-                // Rebuild each subtask's subItems list from the flat list order
-                val seenSubTasks = mutableSetOf<Int>()
+                // Rebuild each subtask's children list from the flat list order.
+                val seenSubTaskIds = mutableSetOf<Int>()
                 for (flatItem in items) {
                     if (flatItem is DetailItem.SubItemRow) {
                         val st = flatItem.subTask
-                        if (st.id !in seenSubTasks) {
-                            st.subItems.clear()
-                            seenSubTasks.add(st.id)
+                        if (st.id !in seenSubTaskIds) {
+                            st.children.clear()
+                            seenSubTaskIds.add(st.id)
                         }
-                        st.subItems.add(flatItem.subItem)
+                        st.children.add(flatItem.subItem)
                     }
                 }
                 refresh()
             }
             else -> {
-                // Subtask drag — rebuild category subTask lists carefully.
+                // Subtask drag — rebuild category children lists.
                 //
-                // The flat `items` list contains CategoryItem headers for ALL categories
-                // (open and closed alike), but SubTaskItem rows only appear under
-                // EXPANDED categories. Closed categories have no SubTaskItem children
-                // in `items` at all.
-                //
-                // Strategy: work entirely from snapshots + expandedCategoryIds,
-                // then apply the single structural change the drag caused.
-                //
-                // 1. Snapshot every category's subTask list.
-                // 2. For each EXPANDED category, rebuild its subTask list from `items`
-                //    (these are the only categories whose subtask ordering may differ
-                //    from the snapshot, and whose SubTaskItem rows are present).
-                // 3. For each CLOSED category, restore from snapshot — their subtasks
-                //    were never in `items` and must never be touched.
-                //
-                // This correctly handles all three scenarios:
-                //   A) Reorder within the same expanded category → rebuilt from items.
-                //   B) Move from one expanded category to another expanded category
-                //      → both rebuilt from items; moved subtask appears under new one.
-                //   C) Move into a closed category (drop onto its header row):
-                //      The dropped SubTaskItem now sits after the closed header in
-                //      `items`. The closed category is NOT in expandedCategoryIds, so
-                //      it would normally be restored from snapshot (missing the drop).
-                //      We handle this by detecting any SubTaskItem that appears directly
-                //      under a closed category header in the flat list, and manually
-                //      appending it to that category's restored snapshot list.
+                // Strategy mirrors the old implementation exactly:
+                // 1. Snapshot every category's children list.
+                // 2. For each EXPANDED category, rebuild from `items`.
+                // 3. For each CLOSED category, restore from snapshot.
+                // 4. Handle the edge case of a subtask dropped onto a closed category header.
 
-                // Step 1: Snapshot.
-                val snapshot: Map<Int, MutableList<SubTask>> = task.categories.associate { cat ->
-                    cat.id to cat.subTasks.toMutableList()
+                val snapshot: Map<Int, MutableList<Node>> = task.children.associate { cat ->
+                    cat.id to cat.children.toMutableList()
                 }
 
-                // Step 2: Rebuild expanded categories from the flat list.
-                // First clear only expanded categories.
-                for (cat in task.categories) {
-                    if (cat.id in expandedCategoryIds) cat.subTasks.clear()
+                // Clear only expanded categories.
+                for (cat in task.children) {
+                    if (cat.id in expandedCategoryIds) cat.children.clear()
                 }
-                // Then walk `items` and fill expanded categories.
-                var currentCat: TaskCategory? = null
+
+                // Walk flat list and fill categories.
+                var currentCat: Node? = null
                 var currentCatIsExpanded: Boolean = false
                 for (flatItem in items) {
                     when (flatItem) {
@@ -549,25 +505,18 @@ class DetailAdapter(
                         }
                         is DetailItem.SubTaskItem -> {
                             if (currentCatIsExpanded) {
-                                // Normal case: subtask under an expanded category.
-                                currentCat?.subTasks?.add(flatItem.subTask)
+                                currentCat?.children?.add(flatItem.subTask)
                             } else {
-                                // Subtask was dropped onto a closed category header.
-                                // currentCat is closed — restore its snapshot first
-                                // (if not already done) then append the moved subtask.
+                                // Subtask dropped onto a closed category header.
                                 currentCat?.let { closedCat ->
                                     val saved = snapshot[closedCat.id]
-                                    if (saved != null && !closedCat.subTasks.containsAll(saved)) {
-                                        closedCat.subTasks.clear()
-                                        closedCat.subTasks.addAll(saved)
+                                    if (saved != null && !closedCat.children.containsAll(saved)) {
+                                        closedCat.children.clear()
+                                        closedCat.children.addAll(saved)
                                     }
-                                    // Add the dropped subtask if not already present
-                                    // (avoid duplicates if somehow called twice).
-                                    if (flatItem.subTask !in closedCat.subTasks) {
-                                        closedCat.subTasks.add(flatItem.subTask)
+                                    if (flatItem.subTask !in closedCat.children) {
+                                        closedCat.children.add(flatItem.subTask)
                                     }
-                                    // Also remove it from its original source category
-                                    // snapshot (it has been moved here now).
                                     snapshot[flatItem.category.id]?.remove(flatItem.subTask)
                                 }
                             }
@@ -576,20 +525,12 @@ class DetailAdapter(
                     }
                 }
 
-                // Step 3: Restore all closed categories that were NOT the drop target
-                // (i.e. their subTasks list was never touched above).
-                for (cat in task.categories) {
+                // Restore untouched closed categories.
+                for (cat in task.children) {
                     if (cat.id !in expandedCategoryIds) {
-                        // Only restore if we didn't already handle it as a drop target
-                        // above. A drop-target closed category already has the right
-                        // contents set in Step 2. We detect "already handled" by checking
-                        // whether subTasks is still at its original size vs the snapshot.
                         val saved = snapshot[cat.id] ?: continue
-                        // If cat.subTasks is empty AND snapshot was non-empty, it means
-                        // we never touched it → restore. If it already has contents
-                        // (set by the drop-target handling above), leave it alone.
-                        if (cat.subTasks.isEmpty() && saved.isNotEmpty()) {
-                            cat.subTasks.addAll(saved)
+                        if (cat.children.isEmpty() && saved.isNotEmpty()) {
+                            cat.children.addAll(saved)
                         }
                     }
                 }
