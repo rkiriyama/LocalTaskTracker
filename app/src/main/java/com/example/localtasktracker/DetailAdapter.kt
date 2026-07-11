@@ -27,7 +27,11 @@ import androidx.recyclerview.widget.RecyclerView
  * ── Drag design ───────────────────────────────────────────────────────────────
  * Category drag  : collapses all child rows so only TYPE_CATEGORY rows remain.
  * Subtask drag   : single-row moves; can cross category boundaries.
- * Subitem drag   : collapses sibling-parent subitems; drag is within-parent only.
+ * Subitem drag   : all visible rows stay in place; can drop onto any visible
+ *                  TYPE_SUBITEM (reorder within parent or move to another parent)
+ *                  or onto any TYPE_SUBTASK (move into that item as a subitem).
+ *                  Items inside collapsed categories are not visible, so they
+ *                  are naturally excluded as drop targets.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 class DetailAdapter(
@@ -400,10 +404,10 @@ class DetailAdapter(
                 if (!isDraggingCategory) collapseAllForCategoryDrag()
             }
             TYPE_SUBITEM -> {
-                if (!isDraggingSubItem) {
-                    val parentSubTask = (items[position] as DetailItem.SubItemRow).subTask
-                    collapseOtherSubItemsForDrag(parentSubTask)
-                }
+                // Leave all visible rows in place so subitems from other
+                // expanded parents and their parent subtask rows remain
+                // visible as valid drop targets.
+                isDraggingSubItem = true
             }
             // TYPE_SUBTASK: nothing to collapse
         }
@@ -413,10 +417,7 @@ class DetailAdapter(
         return when (getItemViewType(position)) {
             TYPE_CATEGORY -> reorderHelper.canDragCategory()
             TYPE_SUBTASK  -> true
-            TYPE_SUBITEM  -> {
-                val subTask = (items[position] as DetailItem.SubItemRow).subTask
-                subTask.children.size >= 2
-            }
+            TYPE_SUBITEM  -> true   // always draggable — can reorder or move cross-parent
             else -> false
         }
     }
@@ -425,7 +426,7 @@ class DetailAdapter(
         val targetType = getItemViewType(position)
         return when {
             isDraggingCategory -> targetType == TYPE_CATEGORY
-            isDraggingSubItem  -> targetType == TYPE_SUBITEM
+            isDraggingSubItem  -> targetType == TYPE_SUBITEM || targetType == TYPE_SUBTASK
             else               -> targetType == TYPE_SUBTASK || targetType == TYPE_CATEGORY
         }
     }
@@ -462,18 +463,83 @@ class DetailAdapter(
             }
             isDraggingSubItem -> {
                 isDraggingSubItem = false
-                // Rebuild each subtask's children list from the flat list order.
-                val seenSubTaskIds = mutableSetOf<Int>()
-                for (flatItem in items) {
-                    if (flatItem is DetailItem.SubItemRow) {
-                        val st = flatItem.subTask
-                        if (st.id !in seenSubTaskIds) {
-                            st.children.clear()
-                            seenSubTaskIds.add(st.id)
+
+                // ── Snapshot every subtask's original children list ────────────
+                // Key: subtask node id  →  original MutableList<Node> (copy)
+                val snapshot: Map<Int, MutableList<Node>> = buildMap {
+                    for (cat in task.children) {
+                        for (sub in cat.children) {
+                            put(sub.id, sub.children.toMutableList())
                         }
-                        st.children.add(flatItem.subItem)
                     }
                 }
+
+                // ── Determine the final parent for the dragged subitem ─────────
+                //
+                // We walk the flat item list to find where the SubItemRow
+                // ended up and what surrounds it:
+                //
+                //   • If its neighbours are other SubItemRows from the SAME
+                //     subtask → it stayed in the same parent (reorder).
+                //   • If it landed next to SubItemRows from a DIFFERENT subtask,
+                //     or directly after a SubTaskItem → it moved cross-parent.
+                //   • If it landed directly on a SubTaskItem (the drag settled
+                //     on a TYPE_SUBTASK row), the SubItemRow will appear just
+                //     after that SubTaskItem in the flat list.
+                //
+                // Strategy: rebuild each subtask's children list from the flat
+                // list, treating the SubTask that immediately precedes each
+                // SubItemRow as its new parent.
+
+                // Clear all subtask children that are visible in the flat list.
+                val subtasksInFlatList = mutableSetOf<Int>()
+                for (flatItem in items) {
+                    when (flatItem) {
+                        is DetailItem.SubTaskItem  -> subtasksInFlatList.add(flatItem.subTask.id)
+                        is DetailItem.SubItemRow   -> subtasksInFlatList.add(flatItem.subTask.id)
+                        else -> {}
+                    }
+                }
+                for (cat in task.children) {
+                    for (sub in cat.children) {
+                        if (sub.id in subtasksInFlatList) sub.children.clear()
+                    }
+                }
+
+                // Walk the flat list; track the "current subtask" and assign
+                // each SubItemRow to it. A SubItemRow's subTask field still
+                // holds its OLD parent — we use the tracked currentSubTask
+                // instead to determine the new parent.
+                var currentSubTask: Node? = null
+                for (flatItem in items) {
+                    when (flatItem) {
+                        is DetailItem.SubTaskItem -> currentSubTask = flatItem.subTask
+                        is DetailItem.SubItemRow  -> {
+                            val newParent = currentSubTask ?: flatItem.subTask
+                            newParent.children.add(flatItem.subItem)
+                            // Ensure the new parent is expanded so the subitem
+                            // is visible immediately after the drop.
+                            if (newParent.id != flatItem.subTask.id) {
+                                expandedSubTaskIds.add(newParent.id)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+
+                // Restore children of subtasks that were NOT visible in the
+                // flat list (inside collapsed categories) — snapshot preserves them.
+                for (cat in task.children) {
+                    for (sub in cat.children) {
+                        if (sub.id !in subtasksInFlatList) {
+                            val saved = snapshot[sub.id] ?: continue
+                            if (sub.children.isEmpty() && saved.isNotEmpty()) {
+                                sub.children.addAll(saved)
+                            }
+                        }
+                    }
+                }
+
                 refresh()
             }
             else -> {
