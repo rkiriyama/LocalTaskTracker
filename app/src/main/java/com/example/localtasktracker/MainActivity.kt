@@ -394,6 +394,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Expands the entire ancestor chain from root down to [targetId] so the
+     * target node is visible after a move. Walks the tree recursively; when
+     * [targetId] is found, returns true and each ancestor on the path gets
+     * added to [expandedNodeIds].
+     */
+    private fun expandAncestorChain(task: Task, targetId: Int) {
+        fun walkAndExpand(node: Node): Boolean {
+            if (node.id == targetId) return true
+            for (child in node.children) {
+                if (walkAndExpand(child)) {
+                    expandedNodeIds.add(node.id)
+                    return true
+                }
+            }
+            return false
+        }
+        task.children.forEach { walkAndExpand(it) }
+    }
+
+    /**
      * Shows the "Move to…" destination picker.
      * Lists every node in the tree (excluding self & descendants) as a valid parent.
      * Also offers "Top level (as category)" if not already at root.
@@ -418,22 +438,28 @@ class MainActivity : AppCompatActivity() {
         // Recursively collect all valid parents
         fun walkDestinations(candidate: Node, path: String) {
             if (candidate.id in excludedIds) return
-            if (currentParent != null && currentParent.id == candidate.id) return
 
-            destinations.add(MoveDestination("$path${candidate.name}") {
-                // Detach from old parent
-                if (currentParent == null) {
-                    task.deleteCategory(node.id)
-                } else {
-                    currentParent.removeChild(node.id)
-                }
-                node.nodeType = NodeType.NODE
-                candidate.children.add(node)
-                expandedNodeIds.add(candidate.id)
-                saveData(); refreshDetail(recyclerView)
-            })
+            // Skip adding the current parent as a destination (already there),
+            // but still recurse into its children so they appear as options.
+            val isCurrentParent = currentParent != null && currentParent.id == candidate.id
+            if (!isCurrentParent) {
+                destinations.add(MoveDestination("$path${candidate.name}") {
+                    // Detach from old parent
+                    if (currentParent == null) {
+                        task.deleteCategory(node.id)
+                    } else {
+                        currentParent.removeChild(node.id)
+                    }
+                    node.nodeType = NodeType.NODE
+                    candidate.children.add(node)
+                    // Expand the entire ancestor chain so the moved node is visible
+                    expandAncestorChain(task, candidate.id)
+                    expandedNodeIds.add(candidate.id)
+                    saveData(); refreshDetail(recyclerView)
+                })
+            }
 
-            // Recurse into children
+            // Always recurse into children (even if candidate is current parent)
             for (child in candidate.children) {
                 if (child.id !in excludedIds) {
                     walkDestinations(child, "$path${candidate.name} → ")
