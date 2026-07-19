@@ -21,11 +21,12 @@ import org.json.JSONObject
 class MainActivity : AppCompatActivity() {
 
     private val tasks = mutableListOf<Task>()
-    private val expandedCategoryIds = mutableSetOf<Int>()
-    private val expandedSubTaskIds  = mutableSetOf<Int>()
 
-    private val savedExpandedCategoryIds = mutableMapOf<Int, MutableSet<Int>>()
-    private val savedExpandedSubTaskIds  = mutableMapOf<Int, MutableSet<Int>>()
+    /** Per-task expand state: task.id → set of expanded node IDs. */
+    private val savedExpandedNodeIds = mutableMapOf<Int, MutableSet<Int>>()
+
+    /** Current detail-screen expand state (active while viewing a task). */
+    private val expandedNodeIds = mutableSetOf<Int>()
 
     private var pendingBackupTask: Task? = null
 
@@ -46,8 +47,8 @@ class MainActivity : AppCompatActivity() {
             if (uri != null) loadChecklistFromUri(uri)
         }
 
-    private var nextTaskId    = 1
-    private var nextNodeId    = 1   // single counter for all Node IDs
+    private var nextTaskId = 1
+    private var nextNodeId = 1
 
     private lateinit var mainLayout: LinearLayout
 
@@ -68,155 +69,6 @@ class MainActivity : AppCompatActivity() {
         setContentView(mainLayout)
         loadData()
         renderTaskListScreen()
-    }
-
-
-    // ─── Persistence ──────────────────────────────────────────────────────────
-
-    /** Recursively serialises a [Node] and all its children. */
-    private fun nodeToJson(node: Node): JSONObject {
-        val obj = JSONObject()
-        obj.put("id",        node.id)
-        obj.put("name",      node.name)
-        obj.put("type",      node.nodeType.name)
-        obj.put("completed", node.isCompleted)
-        val childArr = JSONArray()
-        for (child in node.children) childArr.put(nodeToJson(child))
-        obj.put("children", childArr)
-        return obj
-    }
-
-    /** Recursively deserialises a [Node] from JSON, tracking the max seen ID. */
-    private fun nodeFromJson(obj: JSONObject, maxId: IntArray): Node {
-        val id   = obj.optInt("id", nextNodeId++)
-        val name = obj.optString("name", "Unnamed")
-        val type = try {
-            NodeType.valueOf(obj.optString("type", NodeType.CATEGORY.name))
-        } catch (e: IllegalArgumentException) { NodeType.CATEGORY }
-        val completed = obj.optBoolean("completed", false)
-        if (id > maxId[0]) maxId[0] = id
-        val node = Node(id = id, name = name, nodeType = type, isCompleted = completed)
-        val childArr = obj.optJSONArray("children") ?: JSONArray()
-        for (i in 0 until childArr.length()) {
-            node.children.add(nodeFromJson(childArr.getJSONObject(i), maxId))
-        }
-        return node
-    }
-
-    private fun saveData() {
-        val root = JSONArray()
-        for (task in tasks) {
-            val tObj = JSONObject()
-            tObj.put("id",    task.id)
-            tObj.put("title", task.title)
-
-            val expCatArr = JSONArray()
-            savedExpandedCategoryIds[task.id]?.forEach { expCatArr.put(it) }
-            tObj.put("expandedCategoryIds", expCatArr)
-
-            val expSubArr = JSONArray()
-            savedExpandedSubTaskIds[task.id]?.forEach { expSubArr.put(it) }
-            tObj.put("expandedSubTaskIds", expSubArr)
-
-            val childArr = JSONArray()
-            for (node in task.children) childArr.put(nodeToJson(node))
-            tObj.put("children", childArr)
-
-            root.put(tObj)
-        }
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_DATA, root.toString())
-            .apply()
-    }
-
-
-    private fun loadData() {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val json  = prefs.getString(KEY_DATA, null) ?: return
-        try {
-            tasks.clear()
-            savedExpandedCategoryIds.clear()
-            savedExpandedSubTaskIds.clear()
-            var maxTaskId = 0
-            val maxNodeId = intArrayOf(0)
-
-            val root = JSONArray(json)
-            for (ti in 0 until root.length()) {
-                val tObj = root.getJSONObject(ti)
-                val taskId = tObj.optInt("id", nextTaskId++)
-                if (taskId > maxTaskId) maxTaskId = taskId
-                val task = Task(taskId, tObj.optString("title", "Untitled"))
-
-                val expCatArr = tObj.optJSONArray("expandedCategoryIds")
-                if (expCatArr != null) {
-                    val catSet = mutableSetOf<Int>()
-                    for (i in 0 until expCatArr.length()) catSet.add(expCatArr.getInt(i))
-                    savedExpandedCategoryIds[task.id] = catSet
-                }
-                val expSubArr = tObj.optJSONArray("expandedSubTaskIds")
-                if (expSubArr != null) {
-                    val subSet = mutableSetOf<Int>()
-                    for (i in 0 until expSubArr.length()) subSet.add(expSubArr.getInt(i))
-                    savedExpandedSubTaskIds[task.id] = subSet
-                }
-
-                // New format: "children" array of recursive nodes
-                val childArr = tObj.optJSONArray("children")
-                if (childArr != null) {
-                    for (i in 0 until childArr.length()) {
-                        task.children.add(nodeFromJson(childArr.getJSONObject(i), maxNodeId))
-                    }
-                } else {
-                    // ── Legacy format migration ────────────────────────────────────────
-                    // Old saves used "categories" → subTasks → subItems.
-                    // Translate each to the Node tree so existing data is not lost.
-                    val cats = tObj.optJSONArray("categories") ?: JSONArray()
-                    for (ci in 0 until cats.length()) {
-                        val cObj = cats.getJSONObject(ci)
-                        val catId = cObj.optInt("id", nextNodeId++)
-                        if (catId > maxNodeId[0]) maxNodeId[0] = catId
-                        val catNode = Node(catId, cObj.optString("name", "Unnamed"), NodeType.CATEGORY)
-
-                        val subs = cObj.optJSONArray("subTasks") ?: JSONArray()
-                        for (si in 0 until subs.length()) {
-                            val sObj = subs.getJSONObject(si)
-                            val subId = sObj.optInt("id", nextNodeId++)
-                            if (subId > maxNodeId[0]) maxNodeId[0] = subId
-                            val subNode = Node(
-                                subId,
-                                sObj.optString("name", "Unnamed"),
-                                NodeType.SUBTASK,
-                                sObj.optBoolean("completed", false)
-                            )
-                            val subItemsArr = sObj.optJSONArray("subItems") ?: JSONArray()
-                            for (sii in 0 until subItemsArr.length()) {
-                                val siObj = subItemsArr.getJSONObject(sii)
-                                val siId = siObj.optInt("id", nextNodeId++)
-                                if (siId > maxNodeId[0]) maxNodeId[0] = siId
-                                subNode.children.add(Node(
-                                    siId,
-                                    siObj.optString("name", "Unnamed"),
-                                    NodeType.SUBITEM,
-                                    siObj.optBoolean("completed", false)
-                                ))
-                            }
-                            catNode.children.add(subNode)
-                        }
-                        task.children.add(catNode)
-                    }
-                }
-                tasks.add(task)
-            }
-
-            nextTaskId = maxTaskId + 1
-            nextNodeId = maxNodeId[0] + 1
-
-        } catch (e: Exception) {
-            tasks.clear()
-            savedExpandedCategoryIds.clear()
-            savedExpandedSubTaskIds.clear()
-        }
     }
 
 
@@ -289,30 +141,27 @@ class MainActivity : AppCompatActivity() {
     // ─── Screen 2: Task Detail ────────────────────────────────────────────────
 
     private fun renderTaskDetailScreen(task: Task, startInEditMode: Boolean = false) {
-        expandedCategoryIds.clear()
-        expandedSubTaskIds.clear()
-        val savedCatIds = savedExpandedCategoryIds[task.id]
-        val savedSubIds = savedExpandedSubTaskIds[task.id]
-        if (savedCatIds != null) {
-            expandedCategoryIds.addAll(savedCatIds)
+        // Restore expand state
+        expandedNodeIds.clear()
+        val saved = savedExpandedNodeIds[task.id]
+        if (saved != null) {
+            expandedNodeIds.addAll(saved)
         } else {
-            task.children.forEach { expandedCategoryIds.add(it.id) }
-        }
-        if (savedSubIds != null) {
-            expandedSubTaskIds.addAll(savedSubIds)
-        } else {
-            task.children.forEach { cat ->
-                cat.children.forEach { sub ->
-                    if (sub.hasChildren()) expandedSubTaskIds.add(sub.id)
+            // Default: expand all nodes that have children
+            fun expandAll(node: Node) {
+                if (node.hasChildren()) {
+                    expandedNodeIds.add(node.id)
+                    node.children.forEach { expandAll(it) }
                 }
             }
+            task.children.forEach { expandAll(it) }
         }
 
         mainLayout.removeAllViews()
 
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(0, 0, 0, 24)
         }
         val backBtn = Button(this).apply {
@@ -346,38 +195,23 @@ class MainActivity : AppCompatActivity() {
         mainLayout.addView(recyclerView)
 
         val adapter = DetailAdapter(
-            task                = task,
-            expandedCategoryIds = expandedCategoryIds,
-            expandedSubTaskIds  = expandedSubTaskIds,
-            onCategoryToggle    = { cat ->
-                if (cat.id in expandedCategoryIds) expandedCategoryIds.remove(cat.id)
-                else expandedCategoryIds.add(cat.id)
+            task            = task,
+            expandedNodeIds = expandedNodeIds,
+            onNodeToggle    = { node ->
+                if (node.id in expandedNodeIds) expandedNodeIds.remove(node.id)
+                else expandedNodeIds.add(node.id)
                 saveExpandState(task)
                 refreshDetail(recyclerView)
             },
-            onCategoryOptions   = { cat -> showCategoryOptionsDialog(task, cat, recyclerView) },
-            onSubTaskToggle     = { sub ->
-                if (sub.id in expandedSubTaskIds) expandedSubTaskIds.remove(sub.id)
-                else expandedSubTaskIds.add(sub.id)
-                saveExpandState(task)
-                refreshDetail(recyclerView)
-            },
-            onSubTaskChecked    = { subTask, checked ->
-                subTask.changeStatus(checked)
+            onNodeChecked   = { node, checked ->
+                node.changeStatus(checked)
                 refreshDetail(recyclerView)
                 saveData()
             },
-            onSubTaskOptions    = { cat, subTask -> showSubTaskOptionsDialog(task, cat, subTask, recyclerView) },
-            onAddSubItem        = { subTask -> showAddSubItemDialog(subTask, recyclerView) },
-            onSubItemChecked    = { subItem, checked ->
-                subItem.changeStatus(checked)
-                refreshDetail(recyclerView)
-                saveData()
-            },
-            onSubItemOptions    = { subTask, subItem -> showSubItemOptionsDialog(task, subTask, subItem, recyclerView) },
-            onAddCategory       = { showAddCategoryDialog(task, recyclerView) },
-            onAddItem           = { cat -> showAddSubTaskDialog(task, cat, recyclerView) },
-            onDragFinished      = { saveData() }
+            onNodeOptions   = { node, parent -> showNodeOptionsDialog(task, node, parent, recyclerView) },
+            onAddChild      = { parent -> showAddChildDialog(task, parent, recyclerView) },
+            onAddCategory   = { showAddCategoryDialog(task, recyclerView) },
+            onDragFinished  = { saveData() }
         )
 
         recyclerView.adapter = adapter
@@ -393,15 +227,11 @@ class MainActivity : AppCompatActivity() {
                             0 -> showRenameTaskDialog(task, recyclerView, titleText)
                             1 -> { checkAllNodes(task, true);  saveData(); adapter.refresh() }
                             2 -> { checkAllNodes(task, false); saveData(); adapter.refresh() }
-                            3 -> { expandAll(task); saveExpandState(task); adapter.refresh() }
-                            4 -> { collapseAll(task); saveExpandState(task); adapter.refresh() }
+                            3 -> { expandAllNodes(task); saveExpandState(task); adapter.refresh() }
+                            4 -> { collapseAllNodes(); saveExpandState(task); adapter.refresh() }
                             5 -> launchBackupSingle(task)
                             6 -> showDuplicateTaskDialog(task)
-                            7 -> AlertDialog.Builder(this)
-                                    .setTitle("Delete \"${task.title}\"?")
-                                    .setMessage("This will permanently delete the checklist and all its contents.")
-                                    .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
-                                    .setNegativeButton("Cancel", null).show()
+                            7 -> confirmDeleteTask(task)
                         }
                     }
                     .setNegativeButton("Cancel", null).show()
@@ -413,8 +243,8 @@ class MainActivity : AppCompatActivity() {
                             0 -> { adapter.setEditMode(true); doneBtn.visibility = android.view.View.VISIBLE }
                             1 -> { checkAllNodes(task, true);  saveData(); adapter.refresh() }
                             2 -> { checkAllNodes(task, false); saveData(); adapter.refresh() }
-                            3 -> { expandAll(task); saveExpandState(task); adapter.refresh() }
-                            4 -> { collapseAll(task); saveExpandState(task); adapter.refresh() }
+                            3 -> { expandAllNodes(task); saveExpandState(task); adapter.refresh() }
+                            4 -> { collapseAllNodes(); saveExpandState(task); adapter.refresh() }
                             5 -> launchBackupSingle(task)
                         }
                     }
@@ -433,171 +263,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveExpandState(task: Task) {
-        savedExpandedCategoryIds[task.id] = expandedCategoryIds.toMutableSet()
-        savedExpandedSubTaskIds[task.id]  = expandedSubTaskIds.toMutableSet()
+        savedExpandedNodeIds[task.id] = expandedNodeIds.toMutableSet()
         saveData()
     }
 
 
     // ─── Expand / collapse / check helpers ───────────────────────────────────
 
-    /** Recursively set isCompleted on every node in the task tree. */
     private fun checkAllNodes(task: Task, checked: Boolean) {
-        fun walkNode(node: Node) {
-            node.changeStatus(checked)
-            node.children.forEach { walkNode(it) }
+        fun walk(node: Node) { node.changeStatus(checked); node.children.forEach { walk(it) } }
+        task.children.forEach { walk(it) }
+    }
+
+    private fun expandAllNodes(task: Task) {
+        expandedNodeIds.clear()
+        fun walk(node: Node) {
+            if (node.hasChildren()) { expandedNodeIds.add(node.id); node.children.forEach { walk(it) } }
         }
-        task.children.forEach { walkNode(it) }
+        task.children.forEach { walk(it) }
     }
 
-    private fun expandAll(task: Task) {
-        expandedCategoryIds.clear()
-        expandedSubTaskIds.clear()
-        task.children.forEach { cat ->
-            expandedCategoryIds.add(cat.id)
-            cat.children.forEach { sub ->
-                if (sub.hasChildren()) expandedSubTaskIds.add(sub.id)
-            }
-        }
+    private fun collapseAllNodes() {
+        expandedNodeIds.clear()
     }
-
-    private fun collapseAll(task: Task) {
-        expandedCategoryIds.clear()
-        expandedSubTaskIds.clear()
-    }
-
-    private fun launchBackupSingle(task: Task) {
-        pendingBackupTask = task
-        val safeName = task.title
-            .replace(Regex("[^a-zA-Z0-9_\\- ]"), "")
-            .trim().replace(" ", "_").ifEmpty { "backup" }
-        backupSingleTaskLauncher.launch("${safeName}_backup.json")
-    }
-
-    // ─── Load helpers ─────────────────────────────────────────────────────────
-
-    private fun loadChecklistFromUri(uri: Uri) {
-        val json = try {
-            contentResolver.openInputStream(uri)?.use { it.bufferedReader(Charsets.UTF_8).readText() }
-                ?: run { Toast.makeText(this, "Could not read file", Toast.LENGTH_LONG).show(); return }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Failed to open file: ${e.message}", Toast.LENGTH_LONG).show(); return
-        }
-
-        val root = try { JSONArray(json) } catch (e: Exception) {
-            AlertDialog.Builder(this)
-                .setTitle("Invalid Backup File")
-                .setMessage("The selected file is not a valid backup.")
-                .setPositiveButton("OK", null).show()
-            return
-        }
-
-        if (root.length() == 0) {
-            AlertDialog.Builder(this)
-                .setTitle("Empty Backup")
-                .setMessage("No checklists found in this backup file.")
-                .setPositiveButton("OK", null).show()
-            return
-        }
-        showLoadChecklistDialog(root)
-    }
-
-    private fun showLoadChecklistDialog(root: JSONArray) {
-        val titles = Array(root.length()) { i -> root.getJSONObject(i).optString("title", "Untitled") }
-        AlertDialog.Builder(this)
-            .setTitle("Load Checklist")
-            .setItems(titles) { _, which -> importTaskFromJson(root.getJSONObject(which)) }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun importTaskFromJson(tObj: JSONObject) {
-        val newTask = Task(nextTaskId++, tObj.optString("title", "Untitled"))
-        val maxNodeId = intArrayOf(nextNodeId - 1)
-
-        /** Recursively copy a node, assigning fresh IDs to everything. */
-        fun copyNode(src: JSONObject): Node {
-            val id = nextNodeId++
-            if (id > maxNodeId[0]) maxNodeId[0] = id
-            val type = try { NodeType.valueOf(src.optString("type", NodeType.CATEGORY.name)) }
-                       catch (e: IllegalArgumentException) { NodeType.CATEGORY }
-            val node = Node(id, src.optString("name", "Unnamed"), type,
-                src.optBoolean("completed", false))
-            val childArr = src.optJSONArray("children") ?: JSONArray()
-            for (i in 0 until childArr.length()) node.children.add(copyNode(childArr.getJSONObject(i)))
-            return node
-        }
-
-        val childArr = tObj.optJSONArray("children")
-        if (childArr != null) {
-            for (i in 0 until childArr.length()) newTask.children.add(copyNode(childArr.getJSONObject(i)))
-        } else {
-            // Legacy backup format
-            val cats = tObj.optJSONArray("categories") ?: JSONArray()
-            for (ci in 0 until cats.length()) {
-                val cObj = cats.getJSONObject(ci)
-                val catNode = Node(nextNodeId++, cObj.optString("name", "Unnamed"), NodeType.CATEGORY)
-                val subs = cObj.optJSONArray("subTasks") ?: JSONArray()
-                for (si in 0 until subs.length()) {
-                    val sObj = subs.getJSONObject(si)
-                    val subNode = Node(nextNodeId++, sObj.optString("name", "Unnamed"),
-                        NodeType.SUBTASK, sObj.optBoolean("completed", false))
-                    val subItemsArr = sObj.optJSONArray("subItems") ?: JSONArray()
-                    for (sii in 0 until subItemsArr.length()) {
-                        val siObj = subItemsArr.getJSONObject(sii)
-                        subNode.children.add(Node(nextNodeId++, siObj.optString("name", "Unnamed"),
-                            NodeType.SUBITEM, siObj.optBoolean("completed", false)))
-                    }
-                    catNode.children.add(subNode)
-                }
-                newTask.children.add(catNode)
-            }
-        }
-
-        tasks.add(newTask)
-        saveData()
-        renderTaskListScreen()
-        Toast.makeText(this, "\"${newTask.title}\" loaded successfully", Toast.LENGTH_SHORT).show()
-    }
-
-
-    // ─── Backup helpers ───────────────────────────────────────────────────────
-
-    private fun serializeTasksToJson(taskList: List<Task>): String {
-        val root = JSONArray()
-        for (task in taskList) {
-            val tObj = JSONObject()
-            tObj.put("id",    task.id)
-            tObj.put("title", task.title)
-            val expCatArr = JSONArray()
-            savedExpandedCategoryIds[task.id]?.forEach { expCatArr.put(it) }
-            tObj.put("expandedCategoryIds", expCatArr)
-            val expSubArr = JSONArray()
-            savedExpandedSubTaskIds[task.id]?.forEach { expSubArr.put(it) }
-            tObj.put("expandedSubTaskIds", expSubArr)
-            val childArr = JSONArray()
-            for (node in task.children) childArr.put(nodeToJson(node))
-            tObj.put("children", childArr)
-            root.put(tObj)
-        }
-        return root.toString(2)
-    }
-
-    private fun writeBackupToUri(uri: Uri, json: String) {
-        try {
-            contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray(Charsets.UTF_8)) }
-            Toast.makeText(this, "Backup saved successfully", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Backup failed: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun focusInput(dialog: AlertDialog, input: EditText, selectAll: Boolean = false) {
-        input.requestFocus()
-        if (selectAll) input.selectAll()
-        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
-    }
-
 
     // ─── Add dialogs ──────────────────────────────────────────────────────────
 
@@ -628,7 +316,7 @@ class MainActivity : AppCompatActivity() {
                 if (text.isNotEmpty()) {
                     val newCat = Node(nextNodeId++, text, NodeType.CATEGORY)
                     task.addCategory(newCat)
-                    expandedCategoryIds.add(newCat.id)
+                    expandedNodeIds.add(newCat.id)
                     saveData()
                     refreshDetail(recyclerView)
                 }
@@ -637,33 +325,16 @@ class MainActivity : AppCompatActivity() {
         focusInput(dialog, input)
     }
 
-    private fun showAddSubTaskDialog(task: Task, category: Node, recyclerView: RecyclerView) {
-        val input = EditText(this).apply { hint = "Item name" }
+    private fun showAddChildDialog(task: Task, parent: Node, recyclerView: RecyclerView) {
+        val input = EditText(this).apply { hint = "Name" }
         val dialog = AlertDialog.Builder(this)
-            .setTitle("New Item")
+            .setTitle("Add to \"${parent.name}\"")
             .setView(input)
             .setPositiveButton("Add") { _, _ ->
                 val text = input.text.toString().trim()
                 if (text.isNotEmpty()) {
-                    category.addChild(Node(nextNodeId++, text, NodeType.SUBTASK))
-                    saveData()
-                    refreshDetail(recyclerView)
-                }
-            }
-            .setNegativeButton("Cancel", null).show()
-        focusInput(dialog, input)
-    }
-
-    private fun showAddSubItemDialog(subTask: Node, recyclerView: RecyclerView) {
-        val input = EditText(this).apply { hint = "Subitem name" }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("New Subitem")
-            .setView(input)
-            .setPositiveButton("Add") { _, _ ->
-                val text = input.text.toString().trim()
-                if (text.isNotEmpty()) {
-                    subTask.addChild(Node(nextNodeId++, text, NodeType.SUBITEM))
-                    expandedSubTaskIds.add(subTask.id)
+                    parent.addChild(Node(nextNodeId++, text, NodeType.NODE))
+                    expandedNodeIds.add(parent.id)
                     saveData()
                     refreshDetail(recyclerView)
                 }
@@ -673,114 +344,48 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-    // ─── Delete ───────────────────────────────────────────────────────────────
+    // ─── Node options dialog (⋮) ─────────────────────────────────────────────
 
-    private fun deleteTask(taskId: Int) {
-        tasks.removeAll { it.id == taskId }
-        saveData()
-        renderTaskListScreen()
-    }
-
-    private fun deleteCategory(task: Task, categoryId: Int, recyclerView: RecyclerView) {
-        task.deleteCategory(categoryId)
-        expandedCategoryIds.remove(categoryId)
-        saveData()
-        refreshDetail(recyclerView)
-    }
-
-    private fun deleteSubTask(category: Node, subTaskId: Int, recyclerView: RecyclerView) {
-        category.removeChild(subTaskId)
-        expandedSubTaskIds.remove(subTaskId)
-        saveData()
-        refreshDetail(recyclerView)
-    }
-
-    private fun deleteSubItem(subTask: Node, subItemId: Int, recyclerView: RecyclerView) {
-        subTask.removeChild(subItemId)
-        saveData()
-        refreshDetail(recyclerView)
-    }
-
-    // ─── Rename dialogs ───────────────────────────────────────────────────────
-
-    private fun showRenameTaskDialog(task: Task) {
-        val input = EditText(this).apply { setText(task.title) }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Rename Checklist")
-            .setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                val newName = input.text.toString().trim()
-                if (newName.isNotEmpty()) { task.renameTask(newName); saveData(); renderTaskListScreen() }
+    private fun showNodeOptionsDialog(task: Task, node: Node, parent: Node?, recyclerView: RecyclerView) {
+        AlertDialog.Builder(this)
+            .setTitle(node.name)
+            .setItems(arrayOf("Rename", "Move to…", "Uncheck All", "Delete")) { _, which ->
+                when (which) {
+                    0 -> showRenameNodeDialog(node, recyclerView)
+                    1 -> showMoveToDialog(task, node, parent, recyclerView)
+                    2 -> {
+                        fun uncheckAll(n: Node) { n.changeStatus(false); n.children.forEach { uncheckAll(it) } }
+                        uncheckAll(node)
+                        saveData(); refreshDetail(recyclerView)
+                    }
+                    3 -> confirmDeleteNode(task, node, parent, recyclerView)
+                }
             }
             .setNegativeButton("Cancel", null).show()
-        focusInput(dialog, input, selectAll = true)
     }
 
-    private fun showRenameTaskDialog(task: Task, recyclerView: RecyclerView, titleText: android.widget.TextView) {
-        val input = EditText(this).apply { setText(task.title) }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Rename Checklist")
-            .setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                val newName = input.text.toString().trim()
-                if (newName.isNotEmpty()) { task.renameTask(newName); titleText.text = task.title; saveData() }
+    private fun confirmDeleteNode(task: Task, node: Node, parent: Node?, recyclerView: RecyclerView) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete \"${node.name}\"?")
+            .setMessage("This will permanently delete this item and all its children.")
+            .setPositiveButton("Delete") { _, _ ->
+                if (parent == null) {
+                    task.deleteCategory(node.id)
+                } else {
+                    parent.removeChild(node.id)
+                }
+                expandedNodeIds.remove(node.id)
+                saveData()
+                refreshDetail(recyclerView)
             }
             .setNegativeButton("Cancel", null).show()
-        focusInput(dialog, input, selectAll = true)
-    }
-
-    private fun showRenameCategoryDialog(task: Task, category: Node, recyclerView: RecyclerView) {
-        val input = EditText(this).apply { setText(category.name) }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Rename Category")
-            .setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                val newName = input.text.toString().trim()
-                if (newName.isNotEmpty()) { category.rename(newName); saveData(); refreshDetail(recyclerView) }
-            }
-            .setNegativeButton("Cancel", null).show()
-        focusInput(dialog, input, selectAll = true)
-    }
-
-    private fun showRenameSubTaskDialog(task: Task, category: Node, subTask: Node, recyclerView: RecyclerView) {
-        val input = EditText(this).apply { setText(subTask.name) }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Rename Item")
-            .setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                val newName = input.text.toString().trim()
-                if (newName.isNotEmpty()) { subTask.rename(newName); saveData(); refreshDetail(recyclerView) }
-            }
-            .setNegativeButton("Cancel", null).show()
-        focusInput(dialog, input, selectAll = true)
-    }
-
-    private fun showRenameSubItemDialog(subTask: Node, subItem: Node, recyclerView: RecyclerView) {
-        val input = EditText(this).apply { setText(subItem.name) }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Rename Subitem")
-            .setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                val newName = input.text.toString().trim()
-                if (newName.isNotEmpty()) { subItem.rename(newName); saveData(); refreshDetail(recyclerView) }
-            }
-            .setNegativeButton("Cancel", null).show()
-        focusInput(dialog, input, selectAll = true)
     }
 
 
     // ─── Move to… dialog ─────────────────────────────────────────────────────
 
-    /**
-     * Represents a single destination entry in the "Move to…" picker.
-     * [label] is what the user sees; [action] performs the actual move.
-     */
     private data class MoveDestination(val label: String, val action: () -> Unit)
 
-    /**
-     * Collects all node IDs that are descendants of [node] (inclusive).
-     * Used to prevent circular moves (moving a node into its own subtree).
-     */
     private fun collectDescendantIds(node: Node): Set<Int> {
         val ids = mutableSetOf(node.id)
         fun walk(n: Node) { ids.add(n.id); n.children.forEach { walk(it) } }
@@ -789,90 +394,55 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Shows the "Move to…" destination picker for a given [node].
-     *
-     * [task]           — the current Task (root)
-     * [node]           — the node being moved
-     * [currentParent]  — the direct parent: null if [node] is a top-level category,
-     *                    otherwise the Node whose children list contains [node]
-     * [recyclerView]   — so we can refresh after the move
-     *
-     * The destination list is structured as:
-     *   ★ Top level (as category)              — always present (unless already top-level)
-     *   ──────────────────────
-     *   CategoryName            (as item)      — one per category that isn't the node itself
-     *   ──────────────────────
-     *   CategoryName → ItemName (as subitem)   — one per item that isn't the node itself
-     *
-     * Entries whose parent/target is the node itself or one of its descendants
-     * are excluded to prevent circular nesting.
+     * Shows the "Move to…" destination picker.
+     * Lists every node in the tree (excluding self & descendants) as a valid parent.
+     * Also offers "Top level (as category)" if not already at root.
      */
     private fun showMoveToDialog(
-        task: Task,
-        node: Node,
-        currentParent: Node?,
-        recyclerView: RecyclerView
+        task: Task, node: Node, currentParent: Node?, recyclerView: RecyclerView
     ) {
         val destinations = mutableListOf<MoveDestination>()
         val excludedIds = collectDescendantIds(node)
 
-        // ── Option: promote to top-level category ─────────────────────────────
+        // Option: promote to top level
         if (currentParent != null) {
-            // Not already at top level
             destinations.add(MoveDestination("★ Top level (as category)") {
                 currentParent.removeChild(node.id)
                 node.nodeType = NodeType.CATEGORY
                 task.children.add(node)
-                expandedCategoryIds.add(node.id)
-                saveData()
-                refreshDetail(recyclerView)
+                expandedNodeIds.add(node.id)
+                saveData(); refreshDetail(recyclerView)
             })
         }
 
-        // ── Options: move into each category (becomes an item) ────────────────
-        for (category in task.children) {
-            if (category.id in excludedIds) continue
-            // Skip if this IS the current parent (already there as an item)
-            if (currentParent != null && currentParent.id == category.id) continue
+        // Recursively collect all valid parents
+        fun walkDestinations(candidate: Node, path: String) {
+            if (candidate.id in excludedIds) return
+            if (currentParent != null && currentParent.id == candidate.id) return
 
-            destinations.add(MoveDestination("${category.name}  (as item)") {
+            destinations.add(MoveDestination("$path${candidate.name}") {
                 // Detach from old parent
                 if (currentParent == null) {
                     task.deleteCategory(node.id)
                 } else {
                     currentParent.removeChild(node.id)
                 }
-                node.nodeType = NodeType.SUBTASK
-                category.children.add(node)
-                expandedCategoryIds.add(category.id)
-                saveData()
-                refreshDetail(recyclerView)
+                node.nodeType = NodeType.NODE
+                candidate.children.add(node)
+                expandedNodeIds.add(candidate.id)
+                saveData(); refreshDetail(recyclerView)
             })
+
+            // Recurse into children
+            for (child in candidate.children) {
+                if (child.id !in excludedIds) {
+                    walkDestinations(child, "$path${candidate.name} → ")
+                }
+            }
         }
 
-        // ── Options: move into each item (becomes a subitem) ──────────────────
-        for (category in task.children) {
-            if (category.id in excludedIds) continue
-            for (item in category.children) {
-                if (item.id in excludedIds) continue
-                // Skip if this IS the current parent (already there as a subitem)
-                if (currentParent != null && currentParent.id == item.id) continue
-
-                destinations.add(MoveDestination("${category.name} → ${item.name}  (as subitem)") {
-                    // Detach from old parent
-                    if (currentParent == null) {
-                        task.deleteCategory(node.id)
-                    } else {
-                        currentParent.removeChild(node.id)
-                    }
-                    node.nodeType = NodeType.SUBITEM
-                    item.children.add(node)
-                    expandedCategoryIds.add(category.id)
-                    expandedSubTaskIds.add(item.id)
-                    saveData()
-                    refreshDetail(recyclerView)
-                })
-            }
+        for (cat in task.children) {
+            walkDestinations(cat, "")
         }
 
         if (destinations.isEmpty()) {
@@ -888,7 +458,8 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ─── Options dialogs (⋮) ─────────────────────────────────────────────────
+
+    // ─── Task options dialog (Screen 1 ⋮) ────────────────────────────────────
 
     private fun showTaskOptionsDialog(task: Task) {
         AlertDialog.Builder(this)
@@ -899,92 +470,79 @@ class MainActivity : AppCompatActivity() {
                     1 -> { checkAllNodes(task, true);  saveData(); renderTaskListScreen() }
                     2 -> { checkAllNodes(task, false); saveData(); renderTaskListScreen() }
                     3 -> {
-                        val catIds = mutableSetOf<Int>()
-                        val subIds = mutableSetOf<Int>()
-                        task.children.forEach { cat ->
-                            catIds.add(cat.id)
-                            cat.children.forEach { sub -> if (sub.hasChildren()) subIds.add(sub.id) }
-                        }
-                        savedExpandedCategoryIds[task.id] = catIds
-                        savedExpandedSubTaskIds[task.id]  = subIds
-                        saveData()
-                        renderTaskDetailScreen(task)
+                        expandAllNodes(task)
+                        savedExpandedNodeIds[task.id] = expandedNodeIds.toMutableSet()
+                        saveData(); renderTaskDetailScreen(task)
                     }
                     4 -> {
-                        savedExpandedCategoryIds[task.id] = mutableSetOf()
-                        savedExpandedSubTaskIds[task.id]  = mutableSetOf()
-                        saveData()
-                        renderTaskDetailScreen(task)
+                        collapseAllNodes()
+                        savedExpandedNodeIds[task.id] = mutableSetOf()
+                        saveData(); renderTaskDetailScreen(task)
                     }
                     5 -> showDuplicateTaskDialog(task)
-                    6 -> AlertDialog.Builder(this)
-                            .setTitle("Delete \"${task.title}\"?")
-                            .setMessage("This will permanently delete the checklist and all its contents.")
-                            .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
-                            .setNegativeButton("Cancel", null).show()
+                    6 -> confirmDeleteTask(task)
                 }
             }
             .setNegativeButton("Cancel", null).show()
     }
 
-    private fun showCategoryOptionsDialog(task: Task, category: Node, recyclerView: RecyclerView) {
+    private fun confirmDeleteTask(task: Task) {
         AlertDialog.Builder(this)
-            .setTitle(category.name)
-            .setItems(arrayOf("Rename", "Move to\u2026", "Uncheck All Items", "Delete")) { _, which ->
-                when (which) {
-                    0 -> showRenameCategoryDialog(task, category, recyclerView)
-                    1 -> showMoveToDialog(task, category, null, recyclerView)
-                    2 -> {
-                        fun uncheckAll(node: Node) { node.changeStatus(false); node.children.forEach { uncheckAll(it) } }
-                        category.children.forEach { uncheckAll(it) }
-                        saveData(); refreshDetail(recyclerView)
-                    }
-                    3 -> AlertDialog.Builder(this)
-                            .setTitle("Delete \"${category.name}\"?")
-                            .setMessage("This will permanently delete the category and all its items.")
-                            .setPositiveButton("Delete") { _, _ -> deleteCategory(task, category.id, recyclerView) }
-                            .setNegativeButton("Cancel", null).show()
-                }
-            }
+            .setTitle("Delete \"${task.title}\"?")
+            .setMessage("This will permanently delete the checklist and all its contents.")
+            .setPositiveButton("Delete") { _, _ -> deleteTask(task.id) }
             .setNegativeButton("Cancel", null).show()
     }
 
-    private fun showSubTaskOptionsDialog(task: Task, category: Node, subTask: Node, recyclerView: RecyclerView) {
-        AlertDialog.Builder(this)
-            .setTitle(subTask.name)
-            .setItems(arrayOf("Rename", "Move to\u2026", "Delete")) { _, which ->
-                when (which) {
-                    0 -> showRenameSubTaskDialog(task, category, subTask, recyclerView)
-                    1 -> showMoveToDialog(task, subTask, category, recyclerView)
-                    2 -> AlertDialog.Builder(this)
-                            .setTitle("Delete \"${subTask.name}\"?")
-                            .setPositiveButton("Delete") { _, _ -> deleteSubTask(category, subTask.id, recyclerView) }
-                            .setNegativeButton("Cancel", null).show()
-                }
-            }
-            .setNegativeButton("Cancel", null).show()
+    // ─── Delete ───────────────────────────────────────────────────────────────
+
+    private fun deleteTask(taskId: Int) {
+        tasks.removeAll { it.id == taskId }
+        savedExpandedNodeIds.remove(taskId)
+        saveData()
+        renderTaskListScreen()
     }
 
-    private fun showSubItemOptionsDialog(task: Task, subTask: Node, subItem: Node, recyclerView: RecyclerView) {
-        AlertDialog.Builder(this)
-            .setTitle(subItem.name)
-            .setItems(arrayOf("Rename", "Move to\u2026", "Delete")) { _, which ->
-                when (which) {
-                    0 -> showRenameSubItemDialog(subTask, subItem, recyclerView)
-                    1 -> showMoveToDialog(task, subItem, subTask, recyclerView)
-                    2 -> AlertDialog.Builder(this)
-                            .setTitle("Delete \"${subItem.name}\"?")
-                            .setPositiveButton("Delete") { _, _ -> deleteSubItem(subTask, subItem.id, recyclerView) }
-                            .setNegativeButton("Cancel", null).show()
-                }
+
+    // ─── Rename dialogs ───────────────────────────────────────────────────────
+
+    private fun showRenameTaskDialog(task: Task) {
+        val input = EditText(this).apply { setText(task.title) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Rename Checklist")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val n = input.text.toString().trim()
+                if (n.isNotEmpty()) { task.renameTask(n); saveData(); renderTaskListScreen() }
             }
             .setNegativeButton("Cancel", null).show()
+        focusInput(dialog, input, selectAll = true)
     }
 
-    /** Recursively checks whether [parentNode] or any of its descendants has id == [nodeId]. */
-    private fun containsNode(parentNode: Node, nodeId: Int): Boolean {
-        if (parentNode.id == nodeId) return true
-        return parentNode.children.any { containsNode(it, nodeId) }
+    private fun showRenameTaskDialog(task: Task, recyclerView: RecyclerView, titleText: android.widget.TextView) {
+        val input = EditText(this).apply { setText(task.title) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Rename Checklist")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val n = input.text.toString().trim()
+                if (n.isNotEmpty()) { task.renameTask(n); titleText.text = task.title; saveData() }
+            }
+            .setNegativeButton("Cancel", null).show()
+        focusInput(dialog, input, selectAll = true)
+    }
+
+    private fun showRenameNodeDialog(node: Node, recyclerView: RecyclerView) {
+        val input = EditText(this).apply { setText(node.name) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Rename")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val n = input.text.toString().trim()
+                if (n.isNotEmpty()) { node.rename(n); saveData(); refreshDetail(recyclerView) }
+            }
+            .setNegativeButton("Cancel", null).show()
+        focusInput(dialog, input, selectAll = true)
     }
 
 
@@ -996,8 +554,8 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Duplicate Checklist")
             .setView(input)
             .setPositiveButton("Create") { _, _ ->
-                val newName = input.text.toString().trim()
-                if (newName.isNotEmpty()) duplicateTask(task, newName)
+                val n = input.text.toString().trim()
+                if (n.isNotEmpty()) duplicateTask(task, n)
             }
             .setNegativeButton("Cancel", null).show()
         focusInput(dialog, input, selectAll = true)
@@ -1005,16 +563,262 @@ class MainActivity : AppCompatActivity() {
 
     private fun duplicateTask(original: Task, newName: String) {
         val newTask = Task(nextTaskId++, newName)
-
         fun copyNode(src: Node): Node {
             val copy = Node(nextNodeId++, src.name, src.nodeType, src.isCompleted)
             src.children.forEach { copy.children.add(copyNode(it)) }
             return copy
         }
-
         original.children.forEach { newTask.children.add(copyNode(it)) }
         tasks.add(newTask)
         saveData()
         renderTaskListScreen()
+    }
+
+    // ─── Backup / Load ────────────────────────────────────────────────────────
+
+    private fun launchBackupSingle(task: Task) {
+        pendingBackupTask = task
+        val safeName = task.title
+            .replace(Regex("[^a-zA-Z0-9_\\- ]"), "")
+            .trim().replace(" ", "_").ifEmpty { "backup" }
+        backupSingleTaskLauncher.launch("${safeName}_backup.json")
+    }
+
+    private fun serializeTasksToJson(taskList: List<Task>): String {
+        val root = JSONArray()
+        for (task in taskList) {
+            val tObj = JSONObject()
+            tObj.put("id", task.id)
+            tObj.put("title", task.title)
+            val expArr = JSONArray()
+            savedExpandedNodeIds[task.id]?.forEach { expArr.put(it) }
+            tObj.put("expandedNodeIds", expArr)
+            val childArr = JSONArray()
+            for (node in task.children) childArr.put(nodeToJson(node))
+            tObj.put("children", childArr)
+            root.put(tObj)
+        }
+        return root.toString(2)
+    }
+
+    private fun writeBackupToUri(uri: Uri, json: String) {
+        try {
+            contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray(Charsets.UTF_8)) }
+            Toast.makeText(this, "Backup saved successfully", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Backup failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun loadChecklistFromUri(uri: Uri) {
+        val json = try {
+            contentResolver.openInputStream(uri)?.use { it.bufferedReader(Charsets.UTF_8).readText() }
+                ?: run { Toast.makeText(this, "Could not read file", Toast.LENGTH_LONG).show(); return }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Failed to open file: ${e.message}", Toast.LENGTH_LONG).show(); return
+        }
+        val root = try { JSONArray(json) } catch (_: Exception) {
+            AlertDialog.Builder(this).setTitle("Invalid Backup File")
+                .setMessage("The selected file is not a valid backup.")
+                .setPositiveButton("OK", null).show(); return
+        }
+        if (root.length() == 0) {
+            AlertDialog.Builder(this).setTitle("Empty Backup")
+                .setMessage("No checklists found in this backup file.")
+                .setPositiveButton("OK", null).show(); return
+        }
+        showLoadChecklistDialog(root)
+    }
+
+    private fun showLoadChecklistDialog(root: JSONArray) {
+        val titles = Array(root.length()) { i -> root.getJSONObject(i).optString("title", "Untitled") }
+        AlertDialog.Builder(this)
+            .setTitle("Load Checklist")
+            .setItems(titles) { _, which -> importTaskFromJson(root.getJSONObject(which)) }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun importTaskFromJson(tObj: JSONObject) {
+        val newTask = Task(nextTaskId++, tObj.optString("title", "Untitled"))
+        val maxId = intArrayOf(nextNodeId - 1)
+
+        fun copyNode(src: JSONObject): Node {
+            val id = nextNodeId++
+            if (id > maxId[0]) maxId[0] = id
+            val type = mapLegacyType(src.optString("type", NodeType.CATEGORY.name))
+            val node = Node(id, src.optString("name", "Unnamed"), type,
+                src.optBoolean("completed", false))
+            val childArr = src.optJSONArray("children") ?: JSONArray()
+            for (i in 0 until childArr.length()) node.children.add(copyNode(childArr.getJSONObject(i)))
+            return node
+        }
+
+        val childArr = tObj.optJSONArray("children")
+        if (childArr != null) {
+            for (i in 0 until childArr.length()) newTask.children.add(copyNode(childArr.getJSONObject(i)))
+        } else {
+            // Legacy format: categories → subTasks → subItems
+            val cats = tObj.optJSONArray("categories") ?: JSONArray()
+            for (ci in 0 until cats.length()) {
+                val cObj = cats.getJSONObject(ci)
+                val catNode = Node(nextNodeId++, cObj.optString("name", "Unnamed"), NodeType.CATEGORY)
+                val subs = cObj.optJSONArray("subTasks") ?: JSONArray()
+                for (si in 0 until subs.length()) {
+                    val sObj = subs.getJSONObject(si)
+                    val subNode = Node(nextNodeId++, sObj.optString("name", "Unnamed"),
+                        NodeType.NODE, sObj.optBoolean("completed", false))
+                    val items = sObj.optJSONArray("subItems") ?: JSONArray()
+                    for (ii in 0 until items.length()) {
+                        val iObj = items.getJSONObject(ii)
+                        subNode.children.add(Node(nextNodeId++, iObj.optString("name", "Unnamed"),
+                            NodeType.NODE, iObj.optBoolean("completed", false)))
+                    }
+                    catNode.children.add(subNode)
+                }
+                newTask.children.add(catNode)
+            }
+        }
+        tasks.add(newTask)
+        saveData()
+        renderTaskListScreen()
+        Toast.makeText(this, "\"${newTask.title}\" loaded successfully", Toast.LENGTH_SHORT).show()
+    }
+
+
+    // ─── Persistence ──────────────────────────────────────────────────────────
+
+    private fun nodeToJson(node: Node): JSONObject {
+        val obj = JSONObject()
+        obj.put("id", node.id)
+        obj.put("name", node.name)
+        obj.put("type", node.nodeType.name)
+        obj.put("completed", node.isCompleted)
+        val childArr = JSONArray()
+        for (child in node.children) childArr.put(nodeToJson(child))
+        obj.put("children", childArr)
+        return obj
+    }
+
+    private fun nodeFromJson(obj: JSONObject, maxId: IntArray): Node {
+        val id = obj.optInt("id", nextNodeId++)
+        val name = obj.optString("name", "Unnamed")
+        val type = mapLegacyType(obj.optString("type", NodeType.CATEGORY.name))
+        val completed = obj.optBoolean("completed", false)
+        if (id > maxId[0]) maxId[0] = id
+        val node = Node(id, name, type, completed)
+        val childArr = obj.optJSONArray("children") ?: JSONArray()
+        for (i in 0 until childArr.length()) {
+            node.children.add(nodeFromJson(childArr.getJSONObject(i), maxId))
+        }
+        return node
+    }
+
+    /** Maps old SUBTASK/SUBITEM names to NODE for legacy data migration. */
+    private fun mapLegacyType(typeName: String): NodeType {
+        return when (typeName) {
+            "CATEGORY" -> NodeType.CATEGORY
+            "SUBTASK", "SUBITEM", "NODE" -> NodeType.NODE
+            else -> NodeType.NODE
+        }
+    }
+
+    private fun saveData() {
+        val root = JSONArray()
+        for (task in tasks) {
+            val tObj = JSONObject()
+            tObj.put("id", task.id)
+            tObj.put("title", task.title)
+            val expArr = JSONArray()
+            savedExpandedNodeIds[task.id]?.forEach { expArr.put(it) }
+            tObj.put("expandedNodeIds", expArr)
+            val childArr = JSONArray()
+            for (node in task.children) childArr.put(nodeToJson(node))
+            tObj.put("children", childArr)
+            root.put(tObj)
+        }
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(KEY_DATA, root.toString()).apply()
+    }
+
+    private fun loadData() {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val json = prefs.getString(KEY_DATA, null) ?: return
+        try {
+            tasks.clear()
+            savedExpandedNodeIds.clear()
+            var maxTaskId = 0
+            val maxNodeId = intArrayOf(0)
+
+            val root = JSONArray(json)
+            for (ti in 0 until root.length()) {
+                val tObj = root.getJSONObject(ti)
+                val taskId = tObj.optInt("id", nextTaskId++)
+                if (taskId > maxTaskId) maxTaskId = taskId
+                val task = Task(taskId, tObj.optString("title", "Untitled"))
+
+                // Expand state — new format: single "expandedNodeIds" array
+                val expArr = tObj.optJSONArray("expandedNodeIds")
+                if (expArr != null) {
+                    val ids = mutableSetOf<Int>()
+                    for (i in 0 until expArr.length()) ids.add(expArr.getInt(i))
+                    savedExpandedNodeIds[task.id] = ids
+                } else {
+                    // Legacy: merge old expandedCategoryIds + expandedSubTaskIds
+                    val ids = mutableSetOf<Int>()
+                    val catArr = tObj.optJSONArray("expandedCategoryIds")
+                    if (catArr != null) for (i in 0 until catArr.length()) ids.add(catArr.getInt(i))
+                    val subArr = tObj.optJSONArray("expandedSubTaskIds")
+                    if (subArr != null) for (i in 0 until subArr.length()) ids.add(subArr.getInt(i))
+                    if (ids.isNotEmpty()) savedExpandedNodeIds[task.id] = ids
+                }
+
+                // Children — new format
+                val childArr = tObj.optJSONArray("children")
+                if (childArr != null) {
+                    for (i in 0 until childArr.length()) {
+                        task.children.add(nodeFromJson(childArr.getJSONObject(i), maxNodeId))
+                    }
+                } else {
+                    // Legacy: categories → subTasks → subItems
+                    val cats = tObj.optJSONArray("categories") ?: JSONArray()
+                    for (ci in 0 until cats.length()) {
+                        val cObj = cats.getJSONObject(ci)
+                        val catId = cObj.optInt("id", nextNodeId++)
+                        if (catId > maxNodeId[0]) maxNodeId[0] = catId
+                        val catNode = Node(catId, cObj.optString("name", "Unnamed"), NodeType.CATEGORY)
+                        val subs = cObj.optJSONArray("subTasks") ?: JSONArray()
+                        for (si in 0 until subs.length()) {
+                            val sObj = subs.getJSONObject(si)
+                            val subId = sObj.optInt("id", nextNodeId++)
+                            if (subId > maxNodeId[0]) maxNodeId[0] = subId
+                            val subNode = Node(subId, sObj.optString("name", "Unnamed"),
+                                NodeType.NODE, sObj.optBoolean("completed", false))
+                            val items = sObj.optJSONArray("subItems") ?: JSONArray()
+                            for (ii in 0 until items.length()) {
+                                val iObj = items.getJSONObject(ii)
+                                val siId = iObj.optInt("id", nextNodeId++)
+                                if (siId > maxNodeId[0]) maxNodeId[0] = siId
+                                subNode.children.add(Node(siId, iObj.optString("name", "Unnamed"),
+                                    NodeType.NODE, iObj.optBoolean("completed", false)))
+                            }
+                            catNode.children.add(subNode)
+                        }
+                        task.children.add(catNode)
+                    }
+                }
+                tasks.add(task)
+            }
+            nextTaskId = maxTaskId + 1
+            nextNodeId = maxNodeId[0] + 1
+        } catch (_: Exception) {
+            tasks.clear()
+            savedExpandedNodeIds.clear()
+        }
+    }
+
+    private fun focusInput(dialog: AlertDialog, input: EditText, selectAll: Boolean = false) {
+        input.requestFocus()
+        if (selectAll) input.selectAll()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
     }
 }
