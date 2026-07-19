@@ -374,7 +374,7 @@ class MainActivity : AppCompatActivity() {
                 refreshDetail(recyclerView)
                 saveData()
             },
-            onSubItemOptions    = { subTask, subItem -> showSubItemOptionsDialog(subTask, subItem, recyclerView) },
+            onSubItemOptions    = { subTask, subItem -> showSubItemOptionsDialog(task, subTask, subItem, recyclerView) },
             onAddCategory       = { showAddCategoryDialog(task, recyclerView) },
             onAddItem           = { cat -> showAddSubTaskDialog(task, cat, recyclerView) },
             onDragFinished      = { saveData() }
@@ -769,6 +769,125 @@ class MainActivity : AppCompatActivity() {
     }
 
 
+    // ─── Move to… dialog ─────────────────────────────────────────────────────
+
+    /**
+     * Represents a single destination entry in the "Move to…" picker.
+     * [label] is what the user sees; [action] performs the actual move.
+     */
+    private data class MoveDestination(val label: String, val action: () -> Unit)
+
+    /**
+     * Collects all node IDs that are descendants of [node] (inclusive).
+     * Used to prevent circular moves (moving a node into its own subtree).
+     */
+    private fun collectDescendantIds(node: Node): Set<Int> {
+        val ids = mutableSetOf(node.id)
+        fun walk(n: Node) { ids.add(n.id); n.children.forEach { walk(it) } }
+        node.children.forEach { walk(it) }
+        return ids
+    }
+
+    /**
+     * Shows the "Move to…" destination picker for a given [node].
+     *
+     * [task]           — the current Task (root)
+     * [node]           — the node being moved
+     * [currentParent]  — the direct parent: null if [node] is a top-level category,
+     *                    otherwise the Node whose children list contains [node]
+     * [recyclerView]   — so we can refresh after the move
+     *
+     * The destination list is structured as:
+     *   ★ Top level (as category)              — always present (unless already top-level)
+     *   ──────────────────────
+     *   CategoryName            (as item)      — one per category that isn't the node itself
+     *   ──────────────────────
+     *   CategoryName → ItemName (as subitem)   — one per item that isn't the node itself
+     *
+     * Entries whose parent/target is the node itself or one of its descendants
+     * are excluded to prevent circular nesting.
+     */
+    private fun showMoveToDialog(
+        task: Task,
+        node: Node,
+        currentParent: Node?,
+        recyclerView: RecyclerView
+    ) {
+        val destinations = mutableListOf<MoveDestination>()
+        val excludedIds = collectDescendantIds(node)
+
+        // ── Option: promote to top-level category ─────────────────────────────
+        if (currentParent != null) {
+            // Not already at top level
+            destinations.add(MoveDestination("★ Top level (as category)") {
+                currentParent.removeChild(node.id)
+                node.nodeType = NodeType.CATEGORY
+                task.children.add(node)
+                expandedCategoryIds.add(node.id)
+                saveData()
+                refreshDetail(recyclerView)
+            })
+        }
+
+        // ── Options: move into each category (becomes an item) ────────────────
+        for (category in task.children) {
+            if (category.id in excludedIds) continue
+            // Skip if this IS the current parent (already there as an item)
+            if (currentParent != null && currentParent.id == category.id) continue
+
+            destinations.add(MoveDestination("${category.name}  (as item)") {
+                // Detach from old parent
+                if (currentParent == null) {
+                    task.deleteCategory(node.id)
+                } else {
+                    currentParent.removeChild(node.id)
+                }
+                node.nodeType = NodeType.SUBTASK
+                category.children.add(node)
+                expandedCategoryIds.add(category.id)
+                saveData()
+                refreshDetail(recyclerView)
+            })
+        }
+
+        // ── Options: move into each item (becomes a subitem) ──────────────────
+        for (category in task.children) {
+            if (category.id in excludedIds) continue
+            for (item in category.children) {
+                if (item.id in excludedIds) continue
+                // Skip if this IS the current parent (already there as a subitem)
+                if (currentParent != null && currentParent.id == item.id) continue
+
+                destinations.add(MoveDestination("${category.name} → ${item.name}  (as subitem)") {
+                    // Detach from old parent
+                    if (currentParent == null) {
+                        task.deleteCategory(node.id)
+                    } else {
+                        currentParent.removeChild(node.id)
+                    }
+                    node.nodeType = NodeType.SUBITEM
+                    item.children.add(node)
+                    expandedCategoryIds.add(category.id)
+                    expandedSubTaskIds.add(item.id)
+                    saveData()
+                    refreshDetail(recyclerView)
+                })
+            }
+        }
+
+        if (destinations.isEmpty()) {
+            Toast.makeText(this, "No valid destinations available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val labels = destinations.map { it.label }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Move \"${node.name}\" to…")
+            .setItems(labels) { _, which -> destinations[which].action() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     // ─── Options dialogs (⋮) ─────────────────────────────────────────────────
 
     private fun showTaskOptionsDialog(task: Task) {
@@ -811,15 +930,16 @@ class MainActivity : AppCompatActivity() {
     private fun showCategoryOptionsDialog(task: Task, category: Node, recyclerView: RecyclerView) {
         AlertDialog.Builder(this)
             .setTitle(category.name)
-            .setItems(arrayOf("Rename", "Uncheck All Items", "Delete")) { _, which ->
+            .setItems(arrayOf("Rename", "Move to\u2026", "Uncheck All Items", "Delete")) { _, which ->
                 when (which) {
                     0 -> showRenameCategoryDialog(task, category, recyclerView)
-                    1 -> {
+                    1 -> showMoveToDialog(task, category, null, recyclerView)
+                    2 -> {
                         fun uncheckAll(node: Node) { node.changeStatus(false); node.children.forEach { uncheckAll(it) } }
                         category.children.forEach { uncheckAll(it) }
                         saveData(); refreshDetail(recyclerView)
                     }
-                    2 -> AlertDialog.Builder(this)
+                    3 -> AlertDialog.Builder(this)
                             .setTitle("Delete \"${category.name}\"?")
                             .setMessage("This will permanently delete the category and all its items.")
                             .setPositiveButton("Delete") { _, _ -> deleteCategory(task, category.id, recyclerView) }
@@ -832,10 +952,11 @@ class MainActivity : AppCompatActivity() {
     private fun showSubTaskOptionsDialog(task: Task, category: Node, subTask: Node, recyclerView: RecyclerView) {
         AlertDialog.Builder(this)
             .setTitle(subTask.name)
-            .setItems(arrayOf("Rename", "Delete")) { _, which ->
+            .setItems(arrayOf("Rename", "Move to\u2026", "Delete")) { _, which ->
                 when (which) {
                     0 -> showRenameSubTaskDialog(task, category, subTask, recyclerView)
-                    1 -> AlertDialog.Builder(this)
+                    1 -> showMoveToDialog(task, subTask, category, recyclerView)
+                    2 -> AlertDialog.Builder(this)
                             .setTitle("Delete \"${subTask.name}\"?")
                             .setPositiveButton("Delete") { _, _ -> deleteSubTask(category, subTask.id, recyclerView) }
                             .setNegativeButton("Cancel", null).show()
@@ -844,19 +965,26 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("Cancel", null).show()
     }
 
-    private fun showSubItemOptionsDialog(subTask: Node, subItem: Node, recyclerView: RecyclerView) {
+    private fun showSubItemOptionsDialog(task: Task, subTask: Node, subItem: Node, recyclerView: RecyclerView) {
         AlertDialog.Builder(this)
             .setTitle(subItem.name)
-            .setItems(arrayOf("Rename", "Delete")) { _, which ->
+            .setItems(arrayOf("Rename", "Move to\u2026", "Delete")) { _, which ->
                 when (which) {
                     0 -> showRenameSubItemDialog(subTask, subItem, recyclerView)
-                    1 -> AlertDialog.Builder(this)
+                    1 -> showMoveToDialog(task, subItem, subTask, recyclerView)
+                    2 -> AlertDialog.Builder(this)
                             .setTitle("Delete \"${subItem.name}\"?")
                             .setPositiveButton("Delete") { _, _ -> deleteSubItem(subTask, subItem.id, recyclerView) }
                             .setNegativeButton("Cancel", null).show()
                 }
             }
             .setNegativeButton("Cancel", null).show()
+    }
+
+    /** Recursively checks whether [parentNode] or any of its descendants has id == [nodeId]. */
+    private fun containsNode(parentNode: Node, nodeId: Int): Boolean {
+        if (parentNode.id == nodeId) return true
+        return parentNode.children.any { containsNode(it, nodeId) }
     }
 
 
