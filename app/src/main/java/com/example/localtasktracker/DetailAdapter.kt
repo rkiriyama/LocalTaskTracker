@@ -88,11 +88,27 @@ class DetailAdapter(
 
     fun refresh() {
         items.clear()
+        pruneExpandState()
         for (category in task.children) {
             buildFlat(category, null, 0)
         }
         if (isEditMode) items.add(DetailItem.AddCategoryButton)
         notifyDataSetChanged()
+    }
+
+    /**
+     * Removes IDs from [expandedNodeIds] that no longer exist in the tree.
+     * Prevents stale expand state from causing ghost expansions after moves/deletes.
+     */
+    private fun pruneExpandState() {
+        if (expandedNodeIds.isEmpty()) return
+        val liveIds = mutableSetOf<Int>()
+        fun collectIds(node: Node) {
+            liveIds.add(node.id)
+            node.children.forEach { collectIds(it) }
+        }
+        task.children.forEach { collectIds(it) }
+        expandedNodeIds.retainAll(liveIds)
     }
 
     /**
