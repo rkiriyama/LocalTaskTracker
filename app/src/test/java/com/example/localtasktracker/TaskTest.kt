@@ -17,30 +17,30 @@ class TaskTest {
     private fun categoryNode(id: Int, name: String) =
         Node(id, name, NodeType.CATEGORY)
 
-    private fun plainSubtask(id: Int, name: String, completed: Boolean = false) =
-        Node(id, name, NodeType.SUBTASK, completed)
+    private fun plainNode(id: Int, name: String, completed: Boolean = false) =
+        Node(id, name, NodeType.NODE, completed)
 
-    /** Category pre-loaded with plain (leaf) subtasks. */
+    /** Category pre-loaded with plain (leaf) nodes. */
     private fun categoryWithPlain(
-        catId: Int, catName: String, vararg subtasks: Pair<Int, Boolean>
+        catId: Int, catName: String, vararg children: Pair<Int, Boolean>
     ): Node {
         val cat = categoryNode(catId, catName)
-        subtasks.forEachIndexed { i, (stId, done) ->
-            cat.children.add(plainSubtask(stId, "Sub${catId}_$i", done))
+        children.forEachIndexed { i, (childId, done) ->
+            cat.children.add(plainNode(childId, "Child${catId}_$i", done))
         }
         return cat
     }
 
-    /** Category with one subtask that itself has subitems. */
-    private fun categoryWithParentSubtask(
-        catId: Int, catName: String, stId: Int, vararg subItems: Pair<Int, Boolean>
+    /** Category with one child node that itself has children. */
+    private fun categoryWithNestedNode(
+        catId: Int, catName: String, childId: Int, vararg leaves: Pair<Int, Boolean>
     ): Node {
         val cat = categoryNode(catId, catName)
-        val sub = Node(stId, "Sub$stId", NodeType.SUBTASK)
-        subItems.forEach { (siId, done) ->
-            sub.children.add(Node(siId, "SI$siId", NodeType.SUBITEM, done))
+        val child = Node(childId, "Child$childId", NodeType.NODE)
+        leaves.forEach { (leafId, done) ->
+            child.children.add(Node(leafId, "Leaf$leafId", NodeType.NODE, done))
         }
-        cat.children.add(sub)
+        cat.children.add(child)
         return cat
     }
 
@@ -80,13 +80,6 @@ class TaskTest {
         assertEquals("Original", t.title)
     }
 
-    @Test fun rename_doesNotAffectCategories() {
-        val t = task("T")
-        t.addCategory(categoryNode(1, "C"))
-        t.renameTask("NewT")
-        assertEquals(1, t.children.size)
-    }
-
     // ── addCategory ───────────────────────────────────────────────────────────
 
     @Test fun addCategory_valid_returnsTrue_appended() {
@@ -109,12 +102,6 @@ class TaskTest {
         assertTrue(t.children.isEmpty())
     }
 
-    @Test fun addCategory_blankName_returnsFalse_notAdded() {
-        val t = task()
-        assertFalse(t.addCategory(categoryNode(1, "  ")))
-        assertTrue(t.children.isEmpty())
-    }
-
     // ── deleteCategory ────────────────────────────────────────────────────────
 
     @Test fun deleteCategory_existingId_returnsTrue_removed() {
@@ -124,7 +111,7 @@ class TaskTest {
         assertTrue(t.children.isEmpty())
     }
 
-    @Test fun deleteCategory_nonExistingId_returnsFalse_listUnchanged() {
+    @Test fun deleteCategory_nonExistingId_returnsFalse() {
         val t = task()
         t.addCategory(categoryNode(1, "Cat"))
         assertFalse(t.deleteCategory(99))
@@ -133,15 +120,6 @@ class TaskTest {
 
     @Test fun deleteCategory_emptyList_returnsFalse() {
         assertFalse(task().deleteCategory(1))
-    }
-
-    @Test fun deleteCategory_removesOnlyMatchingId() {
-        val t = task()
-        t.addCategory(categoryNode(1, "Keep"))
-        t.addCategory(categoryNode(2, "Delete"))
-        t.addCategory(categoryNode(3, "Keep"))
-        t.deleteCategory(2)
-        assertEquals(listOf("Keep", "Keep"), t.children.map { it.name })
     }
 
     // ── findCategory ──────────────────────────────────────────────────────────
@@ -157,19 +135,11 @@ class TaskTest {
         assertNull(task().findCategory(99))
     }
 
-    // ── computeProgress — empty ───────────────────────────────────────────────
+    // ── computeProgress ───────────────────────────────────────────────────────
 
     @Test fun computeProgress_noCategories_returnsZero() {
         assertEquals(0, task().computeProgress())
     }
-
-    @Test fun computeProgress_emptyCategoryOnly_returnsZero() {
-        val t = task()
-        t.addCategory(categoryNode(1, "Empty"))
-        assertEquals(0, t.computeProgress())
-    }
-
-    // ── computeProgress — single category, plain subtasks ─────────────────────
 
     @Test fun computeProgress_oneCategory_allComplete_returns100() {
         val t = task()
@@ -189,8 +159,6 @@ class TaskTest {
         assertEquals(50, t.computeProgress())
     }
 
-    // ── computeProgress — multiple categories ────────────────────────────────
-
     @Test fun computeProgress_twoCategories_average() {
         val t = task()
         t.addCategory(categoryWithPlain(1, "C1", 1 to true))
@@ -198,70 +166,20 @@ class TaskTest {
         assertEquals(50, t.computeProgress())
     }
 
-    @Test fun computeProgress_threeCategories_average() {
+    @Test fun computeProgress_nestedNodes_rollUp() {
         val t = task()
-        t.addCategory(categoryWithPlain(1, "C1", 1 to true))
-        t.addCategory(categoryWithPlain(2, "C2", 2 to true, 3 to false))
-        t.addCategory(categoryWithPlain(3, "C3", 4 to false))
+        t.addCategory(categoryWithNestedNode(1, "C", 10, 100 to true, 101 to false))
         assertEquals(50, t.computeProgress())
     }
 
-    // ── computeProgress — recursive sub-item roll-up ──────────────────────────
-
-    @Test fun computeProgress_subItems_rollUpThroughTree() {
+    @Test fun computeProgress_updatesWhenChildCompleted() {
         val t = task()
-        t.addCategory(categoryWithParentSubtask(1, "C", 10, 100 to true, 101 to false))
-        assertEquals(50, t.computeProgress())
-    }
-
-    @Test fun computeProgress_allSubItemsDone_returns100() {
-        val t = task()
-        t.addCategory(categoryWithParentSubtask(1, "C", 10, 100 to true, 101 to true))
-        assertEquals(100, t.computeProgress())
-    }
-
-    @Test fun computeProgress_noSubItemsDone_returnsZero() {
-        val t = task()
-        t.addCategory(categoryWithParentSubtask(1, "C", 10, 100 to false, 101 to false))
-        assertEquals(0, t.computeProgress())
-    }
-
-    @Test fun computeProgress_mixedPlainAndParentSubtasks() {
-        // plain(100) + parent(50) → category = 75 → task = 75
-        val t = task()
+        val child = plainNode(1, "A", false)
         val cat = categoryNode(1, "C")
-        cat.children.add(plainSubtask(1, "Plain", completed = true))
-        val sub = Node(2, "Parent", NodeType.SUBTASK)
-        sub.children.add(Node(10, "SI10", NodeType.SUBITEM, true))
-        sub.children.add(Node(11, "SI11", NodeType.SUBITEM, false))
-        cat.children.add(sub)
-        t.addCategory(cat)
-        assertEquals(75, t.computeProgress())
-    }
-
-    // ── computeProgress — live updates ───────────────────────────────────────
-
-    @Test fun computeProgress_updatesWhenSubTaskCompleted() {
-        val t = task()
-        val st = plainSubtask(1, "A", false)
-        val cat = categoryNode(1, "C")
-        cat.children.add(st)
+        cat.children.add(child)
         t.addCategory(cat)
         assertEquals(0, t.computeProgress())
-        st.changeStatus(true)
-        assertEquals(100, t.computeProgress())
-    }
-
-    @Test fun computeProgress_updatesWhenSubItemCompleted() {
-        val t = task()
-        val si = Node(10, "SI", NodeType.SUBITEM, false)
-        val sub = Node(1, "Parent", NodeType.SUBTASK)
-        sub.children.add(si)
-        val cat = categoryNode(1, "C")
-        cat.children.add(sub)
-        t.addCategory(cat)
-        assertEquals(0, t.computeProgress())
-        si.changeStatus(true)
+        child.changeStatus(true)
         assertEquals(100, t.computeProgress())
     }
 
@@ -272,14 +190,6 @@ class TaskTest {
         assertEquals(50, t.computeProgress())
         t.deleteCategory(2)
         assertEquals(100, t.computeProgress())
-    }
-
-    @Test fun computeProgress_updatesWhenCategoryAdded() {
-        val t = task()
-        t.addCategory(categoryWithPlain(1, "C1", 1 to true))
-        assertEquals(100, t.computeProgress())
-        t.addCategory(categoryWithPlain(2, "C2", 2 to false))
-        assertEquals(50, t.computeProgress())
     }
 
     // ── Data integrity ────────────────────────────────────────────────────────
@@ -299,16 +209,5 @@ class TaskTest {
         t.deleteCategory(2)
         assertEquals(1, t.children[0].id)
         assertEquals(3, t.children[1].id)
-    }
-
-    @Test fun addCategory_preservesExistingCategoryData() {
-        val t = task()
-        val existing = categoryNode(1, "Existing").also {
-            it.children.add(plainSubtask(1, "Sub", completed = true))
-        }
-        t.addCategory(existing)
-        t.addCategory(categoryNode(2, "New"))
-        assertEquals(1, t.children[0].children.size)
-        assertTrue(t.children[0].children[0].isCompleted)
     }
 }

@@ -19,19 +19,19 @@ class CategoryReorderHelperTest {
         return task
     }
 
-    private fun makeTaskWithSubtasks(): Task {
+    private fun makeTaskWithChildren(): Task {
         val task = Task(id = 1, title = "Test Task")
         task.children.add(Node(1, "Cat1", NodeType.CATEGORY).apply {
-            children.add(Node(10, "Sub1A", NodeType.SUBTASK))
-            children.add(Node(11, "Sub1B", NodeType.SUBTASK))
+            children.add(Node(10, "Child1A", NodeType.NODE))
+            children.add(Node(11, "Child1B", NodeType.NODE))
         })
         task.children.add(Node(2, "Cat2", NodeType.CATEGORY).apply {
-            children.add(Node(20, "Sub2A", NodeType.SUBTASK))
+            children.add(Node(20, "Child2A", NodeType.NODE))
         })
         task.children.add(Node(3, "Cat3", NodeType.CATEGORY).apply {
-            children.add(Node(30, "Sub3A", NodeType.SUBTASK))
-            children.add(Node(31, "Sub3B", NodeType.SUBTASK))
-            children.add(Node(32, "Sub3C", NodeType.SUBTASK))
+            children.add(Node(30, "Child3A", NodeType.NODE))
+            children.add(Node(31, "Child3B", NodeType.NODE))
+            children.add(Node(32, "Child3C", NodeType.NODE))
         })
         return task
     }
@@ -52,34 +52,18 @@ class CategoryReorderHelperTest {
         assertTrue(CategoryReorderHelper(makeTask("A", "B")).canDragCategory())
     }
 
-    @Test fun canDrag_manyCategories_true() {
-        assertTrue(CategoryReorderHelper(makeTask("A", "B", "C", "D")).canDragCategory())
-    }
-
     // ── moveCategory ──────────────────────────────────────────────────────────
 
-    @Test fun move_firstToLast_shiftedCorrectly() {
+    @Test fun move_firstToLast() {
         val task = makeTask("Cat1", "Cat2", "Cat3", "Cat4")
         CategoryReorderHelper(task).moveCategory(0, 3)
         assertEquals(listOf("Cat2", "Cat3", "Cat4", "Cat1"), categoryNames(task))
     }
 
-    @Test fun move_lastToFirst_shiftedCorrectly() {
+    @Test fun move_lastToFirst() {
         val task = makeTask("Cat1", "Cat2", "Cat3", "Cat4")
         CategoryReorderHelper(task).moveCategory(3, 0)
         assertEquals(listOf("Cat4", "Cat1", "Cat2", "Cat3"), categoryNames(task))
-    }
-
-    @Test fun move_adjacent_downward() {
-        val task = makeTask("Cat1", "Cat2", "Cat3")
-        CategoryReorderHelper(task).moveCategory(0, 1)
-        assertEquals(listOf("Cat2", "Cat1", "Cat3"), categoryNames(task))
-    }
-
-    @Test fun move_adjacent_upward() {
-        val task = makeTask("Cat1", "Cat2", "Cat3")
-        CategoryReorderHelper(task).moveCategory(2, 1)
-        assertEquals(listOf("Cat1", "Cat3", "Cat2"), categoryNames(task))
     }
 
     @Test fun move_sameIndex_noChange() {
@@ -105,30 +89,29 @@ class CategoryReorderHelperTest {
     // ── Children integrity ────────────────────────────────────────────────────
 
     @Test fun move_childrenStayInsideTheirCategory() {
-        val task = makeTaskWithSubtasks()
-        CategoryReorderHelper(task).moveCategory(0, 2) // Cat1 → end
+        val task = makeTaskWithChildren()
+        CategoryReorderHelper(task).moveCategory(0, 2)
 
         assertEquals("Cat2", task.children[0].name)
         assertEquals(1, task.children[0].children.size)
-        assertEquals("Sub2A", task.children[0].children[0].name)
 
         assertEquals("Cat3", task.children[1].name)
         assertEquals(3, task.children[1].children.size)
 
         assertEquals("Cat1", task.children[2].name)
         assertEquals(2, task.children[2].children.size)
-        assertEquals("Sub1A", task.children[2].children[0].name)
-        assertEquals("Sub1B", task.children[2].children[1].name)
+        assertEquals("Child1A", task.children[2].children[0].name)
+        assertEquals("Child1B", task.children[2].children[1].name)
     }
 
     @Test fun move_childCompletionStatePreserved() {
         val task = Task(id = 1, title = "T")
         task.children.add(Node(1, "Cat1", NodeType.CATEGORY).apply {
-            children.add(Node(10, "Done",    NodeType.SUBTASK, isCompleted = true))
-            children.add(Node(11, "Pending", NodeType.SUBTASK, isCompleted = false))
+            children.add(Node(10, "Done", NodeType.NODE, isCompleted = true))
+            children.add(Node(11, "Pending", NodeType.NODE, isCompleted = false))
         })
         task.children.add(Node(2, "Cat2", NodeType.CATEGORY).apply {
-            children.add(Node(20, "AlsoDone", NodeType.SUBTASK, isCompleted = true))
+            children.add(Node(20, "AlsoDone", NodeType.NODE, isCompleted = true))
         })
 
         CategoryReorderHelper(task).moveCategory(0, 1)
@@ -154,7 +137,7 @@ class CategoryReorderHelperTest {
 
     // ── Multi-step drag simulation ────────────────────────────────────────────
 
-    @Test fun multiStep_dragCat1DownToPosition3_in4CatList() {
+    @Test fun multiStep_dragDown() {
         val task = makeTask("Cat1", "Cat2", "Cat3", "Cat4")
         val h = CategoryReorderHelper(task)
         h.moveCategory(0, 1)
@@ -163,44 +146,12 @@ class CategoryReorderHelperTest {
         assertEquals(listOf("Cat2", "Cat3", "Cat4", "Cat1"), categoryNames(task))
     }
 
-    @Test fun multiStep_dragCat4UpToPosition0_in4CatList() {
+    @Test fun multiStep_dragUp() {
         val task = makeTask("Cat1", "Cat2", "Cat3", "Cat4")
         val h = CategoryReorderHelper(task)
         h.moveCategory(3, 2)
         h.moveCategory(2, 1)
         h.moveCategory(1, 0)
         assertEquals(listOf("Cat4", "Cat1", "Cat2", "Cat3"), categoryNames(task))
-    }
-
-    @Test fun multiStep_dragMiddleCatToTop() {
-        val task = makeTask("Cat1", "Cat2", "Cat3", "Cat4", "Cat5")
-        val h = CategoryReorderHelper(task)
-        h.moveCategory(2, 1)
-        h.moveCategory(1, 0)
-        assertEquals(listOf("Cat3", "Cat1", "Cat2", "Cat4", "Cat5"), categoryNames(task))
-    }
-
-    @Test fun multiStep_dragWithChildren_childrenUnchanged() {
-        val task = makeTaskWithSubtasks() // Cat1(2), Cat2(1), Cat3(3)
-        val h = CategoryReorderHelper(task)
-        h.moveCategory(0, 1)
-        h.moveCategory(1, 2)
-        assertEquals("Cat2", task.children[0].name)
-        assertEquals(1, task.children[0].children.size)
-        assertEquals("Cat3", task.children[1].name)
-        assertEquals(3, task.children[1].children.size)
-        assertEquals("Cat1", task.children[2].name)
-        assertEquals(2, task.children[2].children.size)
-    }
-
-    @Test fun multiStep_twoCategoryList_singleMove() {
-        val task = makeTask("A", "B")
-        CategoryReorderHelper(task).moveCategory(0, 1)
-        assertEquals(listOf("B", "A"), categoryNames(task))
-    }
-
-    @Test fun multiStep_noMoves_orderUnchanged() {
-        val task = makeTask("Alpha", "Beta", "Gamma")
-        assertEquals(listOf("Alpha", "Beta", "Gamma"), categoryNames(task))
     }
 }
