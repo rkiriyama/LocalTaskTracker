@@ -34,7 +34,7 @@ class DetailAdapter(
     private val expandedNodeIds: MutableSet<Int>,
     private val onNodeToggle: (Node) -> Unit,
     private val onNodeChecked: (Node, Boolean) -> Unit,
-    private val onNodeOptions: (Node /* node */, Node? /* parent */) -> Unit,
+    private val onNodeOptions: (Node /* node */, Node? /* parent */, Int /* depth */) -> Unit,
     private val onAddChild: (Node /* parent */) -> Unit,
     private val onAddCategory: () -> Unit,
     private val onDragFinished: () -> Unit
@@ -268,7 +268,7 @@ class DetailAdapter(
                 vh.addBtn.visibility = if (isEditMode) View.VISIBLE else View.GONE
                 vh.addBtn.setOnClickListener { onAddChild(node) }
                 vh.optionsBtn.visibility = if (isEditMode) View.VISIBLE else View.GONE
-                vh.optionsBtn.setOnClickListener { onNodeOptions(node, item.parent) }
+                vh.optionsBtn.setOnClickListener { onNodeOptions(node, item.parent, item.depth) }
             }
 
             is DetailItem.AddChildButton -> {

@@ -208,7 +208,7 @@ class MainActivity : AppCompatActivity() {
                 refreshDetail(recyclerView)
                 saveData()
             },
-            onNodeOptions   = { node, parent -> showNodeOptionsDialog(task, node, parent, recyclerView) },
+            onNodeOptions   = { node, parent, depth -> showNodeOptionsDialog(task, node, parent, depth, recyclerView) },
             onAddChild      = { parent -> showAddChildDialog(task, parent, recyclerView) },
             onAddCategory   = { showAddCategoryDialog(task, recyclerView) },
             onDragFinished  = { saveData() }
@@ -346,22 +346,52 @@ class MainActivity : AppCompatActivity() {
 
     // ─── Node options dialog (⋮) ─────────────────────────────────────────────
 
-    private fun showNodeOptionsDialog(task: Task, node: Node, parent: Node?, recyclerView: RecyclerView) {
-        AlertDialog.Builder(this)
+    private fun showNodeOptionsDialog(task: Task, node: Node, parent: Node?, depth: Int, recyclerView: RecyclerView) {
+        // Pre-compute availability of each directional move
+        val canPromote = hasPromoteTargets(task, node, parent, depth)
+        val canDemote  = hasDemoteTargets(task, node, depth)
+        val canShift   = hasShiftTargets(task, node, parent, depth)
+
+        val labels = arrayOf(
+            "Rename",
+            if (canPromote) "Promote…" else "Promote… (unavailable)",
+            if (canDemote)  "Demote…"  else "Demote… (unavailable)",
+            if (canShift)   "Shift…"   else "Shift… (unavailable)",
+            "Move to…",
+            "Uncheck All",
+            "Delete"
+        )
+
+        val dialog = AlertDialog.Builder(this)
             .setTitle(node.name)
-            .setItems(arrayOf("Rename", "Move to…", "Uncheck All", "Delete")) { _, which ->
+            .setItems(labels) { _, which ->
                 when (which) {
                     0 -> showRenameNodeDialog(node, recyclerView)
-                    1 -> showMoveToDialog(task, node, parent, recyclerView)
-                    2 -> {
+                    1 -> if (canPromote) showPromoteDialog(task, node, parent, depth, recyclerView)
+                         else Toast.makeText(this, "Already at top level", Toast.LENGTH_SHORT).show()
+                    2 -> if (canDemote) showDemoteDialog(task, node, parent, depth, recyclerView)
+                         else Toast.makeText(this, "No deeper targets available", Toast.LENGTH_SHORT).show()
+                    3 -> if (canShift) showShiftDialog(task, node, parent, depth, recyclerView)
+                         else Toast.makeText(this, "No sibling targets available", Toast.LENGTH_SHORT).show()
+                    4 -> showMoveToDialog(task, node, parent, recyclerView)
+                    5 -> {
                         fun uncheckAll(n: Node) { n.changeStatus(false); n.children.forEach { uncheckAll(it) } }
                         uncheckAll(node)
                         saveData(); refreshDetail(recyclerView)
                     }
-                    3 -> confirmDeleteNode(task, node, parent, recyclerView)
+                    6 -> confirmDeleteNode(task, node, parent, recyclerView)
                 }
             }
-            .setNegativeButton("Cancel", null).show()
+            .setNegativeButton("Cancel", null)
+            .show()
+
+        // Grey out unavailable items
+        val listView = dialog.listView
+        listView?.post {
+            if (!canPromote) listView.getChildAt(1)?.alpha = 0.4f
+            if (!canDemote)  listView.getChildAt(2)?.alpha = 0.4f
+            if (!canShift)   listView.getChildAt(3)?.alpha = 0.4f
+        }
     }
 
     private fun confirmDeleteNode(task: Task, node: Node, parent: Node?, recyclerView: RecyclerView) {
@@ -379,6 +409,270 @@ class MainActivity : AppCompatActivity() {
                 refreshDetail(recyclerView)
             }
             .setNegativeButton("Cancel", null).show()
+    }
+
+    // ─── Promote / Demote / Shift helpers ─────────────────────────────────────
+
+    /**
+     * Finds the depth of a node in the task tree. Returns -1 if not found.
+     */
+    private fun findNodeDepth(task: Task, targetId: Int): Int {
+        fun walk(node: Node, depth: Int): Int {
+            if (node.id == targetId) return depth
+            for (child in node.children) {
+                val result = walk(child, depth + 1)
+                if (result >= 0) return result
+            }
+            return -1
+        }
+        for (cat in task.children) {
+            val result = walk(cat, 0)
+            if (result >= 0) return result
+        }
+        return -1
+    }
+
+    /** True if there are valid promote targets (destinations at a shallower depth). */
+    private fun hasPromoteTargets(task: Task, node: Node, parent: Node?, depth: Int): Boolean {
+        // Can promote if not already at top level (depth > 0)
+        return depth > 0
+    }
+
+    /** True if there are valid demote targets (siblings or their descendants that can become the new parent). */
+    private fun hasDemoteTargets(task: Task, node: Node, depth: Int): Boolean {
+        val excludedIds = collectDescendantIds(node)
+        // Look for any node at depth >= current depth that isn't self/descendant
+        fun walk(candidate: Node, candidateDepth: Int): Boolean {
+            if (candidate.id in excludedIds) return false
+            if (candidateDepth >= depth) return true
+            for (child in candidate.children) {
+                if (walk(child, candidateDepth + 1)) return true
+            }
+            return false
+        }
+        for (cat in task.children) {
+            if (walk(cat, 0)) return true
+        }
+        return false
+    }
+
+    /** True if there are valid shift targets (same depth, different parent). */
+    private fun hasShiftTargets(task: Task, node: Node, parent: Node?, depth: Int): Boolean {
+        val excludedIds = collectDescendantIds(node)
+        // Look for any node at exactly (depth - 1) that has children or could accept one,
+        // and isn't the current parent.
+        fun walk(candidate: Node, candidateDepth: Int): Boolean {
+            if (candidate.id in excludedIds) return false
+            // A valid shift target is a node at depth-1 (would be the new parent,
+            // making the moved node at depth) — and it's not the current parent.
+            if (candidateDepth == depth - 1 && candidate.id != (parent?.id ?: -1)) return true
+            // For top-level nodes (depth == 0), shift means other top-level parents don't exist
+            // (there's no parent of top-level), so we skip.
+            for (child in candidate.children) {
+                if (walk(child, candidateDepth + 1)) return true
+            }
+            return false
+        }
+        if (depth == 0) {
+            // Shift at depth 0 = move to a different position among siblings,
+            // but since drag already handles reordering among siblings,
+            // shift at depth 0 has no lateral targets (there's only one "parent" = root).
+            return false
+        }
+        for (cat in task.children) {
+            if (walk(cat, 0)) return true
+        }
+        return false
+    }
+
+    // ─── Promote dialog ───────────────────────────────────────────────────────
+
+    /**
+     * Shows targets at a shallower depth than the node's current depth.
+     * - "★ Top level (as category)" is always an option if depth > 0
+     * - Any ancestor between root and currentParent is a valid target
+     */
+    private fun showPromoteDialog(task: Task, node: Node, currentParent: Node?, depth: Int, recyclerView: RecyclerView) {
+        val destinations = mutableListOf<MoveDestination>()
+        val excludedIds = collectDescendantIds(node)
+
+        // Always offer top level
+        if (currentParent != null) {
+            destinations.add(MoveDestination("★ Top level (as category)") {
+                currentParent.removeChild(node.id)
+                node.nodeType = NodeType.CATEGORY
+                task.children.add(node)
+                expandedNodeIds.add(node.id)
+                saveData(); refreshDetail(recyclerView)
+            })
+        }
+
+        // Walk tree and collect nodes at depth < current depth (shallower)
+        // that are not the current parent and not descendants of the node.
+        fun walkPromote(candidate: Node, path: String, candidateDepth: Int) {
+            if (candidate.id in excludedIds) return
+            val isCurrentParent = currentParent != null && currentParent.id == candidate.id
+
+            // Valid promote target: depth < node's depth AND not current parent
+            if (candidateDepth < depth && !isCurrentParent) {
+                destinations.add(MoveDestination("$path${candidate.name}") {
+                    if (currentParent == null) {
+                        task.deleteCategory(node.id)
+                    } else {
+                        currentParent.removeChild(node.id)
+                    }
+                    node.nodeType = NodeType.NODE
+                    candidate.children.add(node)
+                    expandAncestorChain(task, candidate.id)
+                    expandedNodeIds.add(candidate.id)
+                    saveData(); refreshDetail(recyclerView)
+                })
+            }
+
+            // Only recurse if we haven't reached the node's depth yet
+            if (candidateDepth < depth - 1) {
+                for (child in candidate.children) {
+                    if (child.id !in excludedIds) {
+                        walkPromote(child, "$path${candidate.name} → ", candidateDepth + 1)
+                    }
+                }
+            }
+        }
+
+        for (cat in task.children) {
+            walkPromote(cat, "", 0)
+        }
+
+        if (destinations.isEmpty()) {
+            Toast.makeText(this, "No promote targets available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val labels = destinations.map { it.label }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Promote \"${node.name}\" to…")
+            .setItems(labels) { _, which -> destinations[which].action() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ─── Demote dialog ────────────────────────────────────────────────────────
+
+    /**
+     * Shows targets at a deeper depth than the node's current depth.
+     * Valid targets are nodes at depth >= current depth (the node becomes their child,
+     * ending up one level deeper). Excludes self and descendants.
+     */
+    private fun showDemoteDialog(task: Task, node: Node, currentParent: Node?, depth: Int, recyclerView: RecyclerView) {
+        val destinations = mutableListOf<MoveDestination>()
+        val excludedIds = collectDescendantIds(node)
+
+        fun walkDemote(candidate: Node, path: String, candidateDepth: Int) {
+            if (candidate.id in excludedIds) return
+            val isCurrentParent = currentParent != null && currentParent.id == candidate.id
+
+            // Valid demote target: candidate is at depth >= node's current depth
+            // (making the node a child of candidate, thus at candidateDepth+1 > current depth)
+            if (candidateDepth >= depth && !isCurrentParent) {
+                destinations.add(MoveDestination("$path${candidate.name}") {
+                    if (currentParent == null) {
+                        task.deleteCategory(node.id)
+                    } else {
+                        currentParent.removeChild(node.id)
+                    }
+                    node.nodeType = NodeType.NODE
+                    candidate.children.add(node)
+                    expandAncestorChain(task, candidate.id)
+                    expandedNodeIds.add(candidate.id)
+                    saveData(); refreshDetail(recyclerView)
+                })
+            }
+
+            // Recurse deeper
+            for (child in candidate.children) {
+                if (child.id !in excludedIds) {
+                    walkDemote(child, "$path${candidate.name} → ", candidateDepth + 1)
+                }
+            }
+        }
+
+        for (cat in task.children) {
+            walkDemote(cat, "", 0)
+        }
+
+        if (destinations.isEmpty()) {
+            Toast.makeText(this, "No demote targets available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val labels = destinations.map { it.label }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Demote \"${node.name}\" to…")
+            .setItems(labels) { _, which -> destinations[which].action() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ─── Shift dialog ─────────────────────────────────────────────────────────
+
+    /**
+     * Shows targets at the same depth — i.e. other parents at depth-1 that the
+     * node can become a child of, keeping it at the same level in the hierarchy.
+     */
+    private fun showShiftDialog(task: Task, node: Node, currentParent: Node?, depth: Int, recyclerView: RecyclerView) {
+        val destinations = mutableListOf<MoveDestination>()
+        val excludedIds = collectDescendantIds(node)
+
+        // We need nodes at depth == (depth - 1) that are not the current parent.
+        // The moved node becomes a child of that target, thus staying at `depth`.
+        fun walkShift(candidate: Node, path: String, candidateDepth: Int) {
+            if (candidate.id in excludedIds) return
+
+            if (candidateDepth == depth - 1) {
+                val isCurrentParent = currentParent != null && currentParent.id == candidate.id
+                if (!isCurrentParent) {
+                    destinations.add(MoveDestination("$path${candidate.name}") {
+                        if (currentParent == null) {
+                            task.deleteCategory(node.id)
+                        } else {
+                            currentParent.removeChild(node.id)
+                        }
+                        node.nodeType = NodeType.NODE
+                        candidate.children.add(node)
+                        expandAncestorChain(task, candidate.id)
+                        expandedNodeIds.add(candidate.id)
+                        saveData(); refreshDetail(recyclerView)
+                    })
+                }
+                // Don't recurse deeper — we only want exact depth match
+                return
+            }
+
+            // Recurse to find candidates at the right depth
+            if (candidateDepth < depth - 1) {
+                for (child in candidate.children) {
+                    if (child.id !in excludedIds) {
+                        walkShift(child, "$path${candidate.name} → ", candidateDepth + 1)
+                    }
+                }
+            }
+        }
+
+        for (cat in task.children) {
+            walkShift(cat, "", 0)
+        }
+
+        if (destinations.isEmpty()) {
+            Toast.makeText(this, "No shift targets available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val labels = destinations.map { it.label }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Shift \"${node.name}\" to…")
+            .setItems(labels) { _, which -> destinations[which].action() }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
 
