@@ -351,12 +351,14 @@ class MainActivity : AppCompatActivity() {
         val canPromote = hasPromoteTargets(task, node, parent, depth)
         val canDemote  = hasDemoteTargets(task, node, depth)
         val canShift   = hasShiftTargets(task, node, parent, depth)
+        val canSwap    = hasSwapTargets(task, node)
 
         val labels = arrayOf(
             "Rename",
             if (canPromote) "Promote…" else "Promote… (unavailable)",
             if (canDemote)  "Demote…"  else "Demote… (unavailable)",
             if (canShift)   "Shift…"   else "Shift… (unavailable)",
+            if (canSwap)    "Swap…"    else "Swap… (unavailable)",
             "Move to…",
             "Uncheck All",
             "Delete"
@@ -373,13 +375,15 @@ class MainActivity : AppCompatActivity() {
                          else Toast.makeText(this, "No deeper targets available", Toast.LENGTH_SHORT).show()
                     3 -> if (canShift) showShiftDialog(task, node, parent, depth, recyclerView)
                          else Toast.makeText(this, "No sibling targets available", Toast.LENGTH_SHORT).show()
-                    4 -> showMoveToDialog(task, node, parent, recyclerView)
-                    5 -> {
+                    4 -> if (canSwap) showSwapDialog(task, node, parent, depth, recyclerView)
+                         else Toast.makeText(this, "No swap targets available", Toast.LENGTH_SHORT).show()
+                    5 -> showMoveToDialog(task, node, parent, recyclerView)
+                    6 -> {
                         fun uncheckAll(n: Node) { n.changeStatus(false); n.children.forEach { uncheckAll(it) } }
                         uncheckAll(node)
                         saveData(); refreshDetail(recyclerView)
                     }
-                    6 -> confirmDeleteNode(task, node, parent, recyclerView)
+                    7 -> confirmDeleteNode(task, node, parent, recyclerView)
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -391,6 +395,7 @@ class MainActivity : AppCompatActivity() {
             if (!canPromote) listView.getChildAt(1)?.alpha = 0.4f
             if (!canDemote)  listView.getChildAt(2)?.alpha = 0.4f
             if (!canShift)   listView.getChildAt(3)?.alpha = 0.4f
+            if (!canSwap)    listView.getChildAt(4)?.alpha = 0.4f
         }
     }
 
@@ -673,6 +678,176 @@ class MainActivity : AppCompatActivity() {
             .setItems(labels) { _, which -> destinations[which].action() }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+
+    // ─── Swap dialog ─────────────────────────────────────────────────────────
+
+    /**
+     * True if there's at least one valid swap target — any node in the tree
+     * that is not self, not an ancestor, and not a descendant.
+     */
+    private fun hasSwapTargets(task: Task, node: Node): Boolean {
+        val excludedIds = collectDescendantIds(node)
+        val ancestorIds = collectAncestorIds(task, node.id)
+
+        fun walk(candidate: Node): Boolean {
+            if (candidate.id != node.id &&
+                candidate.id !in excludedIds &&
+                candidate.id !in ancestorIds) return true
+            for (child in candidate.children) {
+                if (walk(child)) return true
+            }
+            return false
+        }
+        for (cat in task.children) {
+            if (walk(cat)) return true
+        }
+        return false
+    }
+
+    /**
+     * Collects IDs of all ancestors of [targetId] in the tree (exclusive of targetId itself).
+     */
+    private fun collectAncestorIds(task: Task, targetId: Int): Set<Int> {
+        val ancestors = mutableSetOf<Int>()
+        fun walk(node: Node): Boolean {
+            if (node.id == targetId) return true
+            for (child in node.children) {
+                if (walk(child)) {
+                    ancestors.add(node.id)
+                    return true
+                }
+            }
+            return false
+        }
+        task.children.forEach { walk(it) }
+        return ancestors
+    }
+
+    /**
+     * Finds the parent of a node by ID. Returns null if the node is at root level.
+     */
+    private fun findParentOf(task: Task, targetId: Int): Node? {
+        fun walk(node: Node): Node? {
+            for (child in node.children) {
+                if (child.id == targetId) return node
+                val result = walk(child)
+                if (result != null) return result
+            }
+            return null
+        }
+        for (cat in task.children) {
+            if (cat.id == targetId) return null
+            val result = walk(cat)
+            if (result != null) return result
+        }
+        return null
+    }
+
+    /**
+     * Shows the swap picker.
+     *
+     * Swap exchanges only the nodes themselves — children stay in place.
+     * After swap, each node's nodeType is updated to match its new depth
+     * (depth 0 = CATEGORY, else = NODE).
+     *
+     * Excluded targets: self, ancestors, descendants (to prevent cycles).
+     */
+    private fun showSwapDialog(task: Task, node: Node, nodeParent: Node?, nodeDepth: Int, recyclerView: RecyclerView) {
+        val destinations = mutableListOf<MoveDestination>()
+        val excludedIds = collectDescendantIds(node)
+        val ancestorIds = collectAncestorIds(task, node.id)
+
+        fun walkSwap(candidate: Node, path: String, candidateDepth: Int) {
+            if (candidate.id == node.id) {
+                // Skip self but still recurse into children
+                for (child in candidate.children) {
+                    walkSwap(child, "$path${candidate.name} → ", candidateDepth + 1)
+                }
+                return
+            }
+            if (candidate.id in excludedIds || candidate.id in ancestorIds) {
+                // Skip descendants and ancestors entirely
+                return
+            }
+
+            val candidateParent = findParentOf(task, candidate.id)
+
+            destinations.add(MoveDestination("$path${candidate.name}") {
+                performSwap(task, node, nodeParent, nodeDepth, candidate, candidateParent, candidateDepth, recyclerView)
+            })
+
+            // Recurse into candidate's children
+            for (child in candidate.children) {
+                walkSwap(child, "$path${candidate.name} → ", candidateDepth + 1)
+            }
+        }
+
+        for (cat in task.children) {
+            walkSwap(cat, "", 0)
+        }
+
+        if (destinations.isEmpty()) {
+            Toast.makeText(this, "No swap targets available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val labels = destinations.map { it.label }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Swap \"${node.name}\" with…")
+            .setItems(labels) { _, which -> destinations[which].action() }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /**
+     * Performs the actual swap between [nodeA] and [nodeB].
+     *
+     * Swap only exchanges the nodes' positions — children stay where they are.
+     * After the swap:
+     *   - nodeA is in nodeB's old position (parentB's children at indexB)
+     *   - nodeB is in nodeA's old position (parentA's children at indexA)
+     *   - nodeA gets nodeB's old children, nodeB gets nodeA's old children
+     *     (since children "stay" means stay at the position, not with the node)
+     *   - nodeType updated to match new depth
+     */
+    private fun performSwap(
+        task: Task,
+        nodeA: Node, parentA: Node?, depthA: Int,
+        nodeB: Node, parentB: Node?, depthB: Int,
+        recyclerView: RecyclerView
+    ) {
+        val listA = if (parentA == null) task.children else parentA.children
+        val listB = if (parentB == null) task.children else parentB.children
+
+        val indexA = listA.indexOfFirst { it.id == nodeA.id }
+        val indexB = listB.indexOfFirst { it.id == nodeB.id }
+
+        if (indexA < 0 || indexB < 0) return // safety
+
+        // Swap the children lists between the two nodes (children stay at position)
+        val childrenOfA = nodeA.children.toMutableList()
+        val childrenOfB = nodeB.children.toMutableList()
+        nodeA.children.clear()
+        nodeA.children.addAll(childrenOfB)
+        nodeB.children.clear()
+        nodeB.children.addAll(childrenOfA)
+
+        // Place nodes in each other's positions
+        listA[indexA] = nodeB
+        listB[indexB] = nodeA
+
+        // Update nodeType to match new depth
+        nodeA.nodeType = if (depthB == 0) NodeType.CATEGORY else NodeType.NODE
+        nodeB.nodeType = if (depthA == 0) NodeType.CATEGORY else NodeType.NODE
+
+        // Expand ancestor chains so both nodes are visible
+        expandAncestorChain(task, nodeA.id)
+        expandAncestorChain(task, nodeB.id)
+
+        saveData()
+        refreshDetail(recyclerView)
     }
 
 
